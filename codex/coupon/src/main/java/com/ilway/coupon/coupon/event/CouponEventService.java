@@ -6,6 +6,7 @@ import com.ilway.coupon.coupon.event.api.AdminCouponEventStatisticsResponse;
 import com.ilway.coupon.coupon.event.api.CouponEventResponse;
 import com.ilway.coupon.coupon.event.api.CreateCouponEventRequest;
 import com.ilway.coupon.coupon.issue.CouponIssueRepository;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestService;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -17,6 +18,7 @@ public class CouponEventService {
 
   private final CouponEventRepository couponEventRepository;
   private final CouponIssueRepository couponIssueRepository;
+  private final CouponIssueRequestService couponIssueRequestService;
 
   @Transactional
   public CouponEventResponse create(CreateCouponEventRequest request) {
@@ -42,6 +44,19 @@ public class CouponEventService {
     CouponEvent couponEvent = couponEventRepository.findById(couponEventId)
         .orElseThrow(() -> new BusinessException(ErrorCode.COUPON_EVENT_NOT_FOUND));
     long successCount = couponIssueRepository.countByCouponEvent_Id(couponEventId);
-    return AdminCouponEventStatisticsResponse.from(couponEvent, successCount, LocalDateTime.now());
+    long totalRequestCount = couponIssueRequestService.getTotalRequestCount(couponEventId);
+    long successRequestCount = couponIssueRequestService.getSuccessRequestCount(couponEventId);
+    long failureRequestCount = couponIssueRequestService.getFailureRequestCount(couponEventId);
+    long reusedRequestCount = couponIssueRequestService.getReusedRequestCount(couponEventId);
+    return AdminCouponEventStatisticsResponse.from(
+        couponEvent,
+        successCount,
+        totalRequestCount,
+        successRequestCount,
+        failureRequestCount,
+        reusedRequestCount,
+        couponIssueRequestService.getFailureReasonCounts(couponEventId),
+        LocalDateTime.now()
+    );
   }
 }

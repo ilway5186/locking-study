@@ -4,10 +4,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.ilway.coupon.common.exception.BusinessException;
 import com.ilway.coupon.common.exception.ErrorCode;
+import com.ilway.coupon.comparison.conditional.ConditionalCouponIssueService;
+import com.ilway.coupon.comparison.optimistic.OptimisticCouponIssueService;
 import com.ilway.coupon.comparison.unsafe.UnsafeCouponIssueRepository;
 import com.ilway.coupon.comparison.unsafe.UnsafeCouponIssueService;
 import com.ilway.coupon.coupon.event.CouponEvent;
 import com.ilway.coupon.coupon.event.CouponEventRepository;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestRepository;
 import com.ilway.coupon.support.MySqlIntegrationTestSupport;
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -30,6 +33,12 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
   private UnsafeCouponIssueService unsafeCouponIssueService;
 
   @Autowired
+  private ConditionalCouponIssueService conditionalCouponIssueService;
+
+  @Autowired
+  private OptimisticCouponIssueService optimisticCouponIssueService;
+
+  @Autowired
   private CouponEventRepository couponEventRepository;
 
   @Autowired
@@ -38,9 +47,13 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
   @Autowired
   private UnsafeCouponIssueRepository unsafeCouponIssueRepository;
 
+  @Autowired
+  private CouponIssueRequestRepository couponIssueRequestRepository;
+
   @BeforeEach
   void setUp() {
     unsafeCouponIssueRepository.deleteAllInBatch();
+    couponIssueRequestRepository.deleteAllInBatch();
     couponIssueRepository.deleteAllInBatch();
     couponEventRepository.deleteAllInBatch();
   }
@@ -81,6 +94,25 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
   }
 
   @Test
+  void 같은_idempotencyKey로_100번_동시에_요청하면_발급은_1번만_일어나고_나머지는_재사용또는_중복요청처리된다() throws InterruptedException {
+    CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
+        "safe-idempotency",
+        100,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    ConcurrentResult result = runConcurrent(100, index -> () -> couponIssueService.issue(couponEvent.getId(), 77L, "same-key"));
+
+    long reusedCount = couponIssueRequestRepository.findAll().getFirst().getReusedCount();
+
+    assertThat(couponIssueRepository.count()).isEqualTo(1);
+    assertThat(couponIssueRequestRepository.count()).isEqualTo(1);
+    assertThat(reusedCount).isEqualTo(99);
+    assertThat(result.successCount() + result.failureCount(ErrorCode.DUPLICATE_REQUEST_IN_PROGRESS)).isEqualTo(100);
+  }
+
+  @Test
   void safe구현은_여러_유저가_동시에_요청해도_총_발급량을_초과하지_않는다() throws InterruptedException {
     CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
         "safe-bulk",
@@ -97,6 +129,68 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
     assertThat(result.failureCount(ErrorCode.SOLD_OUT)).isEqualTo(270);
     assertThat(couponIssueRepository.count()).isEqualTo(30);
     assertThat(reloaded.getIssuedQuantity()).isEqualTo(30);
+  }
+
+  @Test
+  void 조건부update구현도_동시요청에서_총_발급량을_초과하지_않는다() throws InterruptedException {
+    CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
+        "conditional-bulk",
+        30,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    long startedAt = System.nanoTime();
+    ConcurrentResult result = runConcurrent(300, index -> () -> conditionalCouponIssueService.issue(couponEvent.getId(), (long) index + 5000));
+    long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
+    CouponEvent reloaded = couponEventRepository.findById(couponEvent.getId()).orElseThrow();
+
+    System.out.printf("conditional-update elapsed=%dms success=%d soldOut=%d%n",
+        elapsedMillis,
+        result.successCount(),
+        result.failureCount(ErrorCode.SOLD_OUT)
+    );
+
+    assertThat(result.successCount()).isEqualTo(30);
+    assertThat(result.failureCount(ErrorCode.SOLD_OUT)).isEqualTo(270);
+    assertThat(couponIssueRepository.count()).isEqualTo(30);
+    assertThat(reloaded.getIssuedQuantity()).isEqualTo(30);
+  }
+
+  @Test
+  void 비관적락과_조건부update는_둘다_안전하지만_흐름이_다르다() throws InterruptedException {
+    CouponEvent pessimisticEvent = couponEventRepository.save(CouponEvent.create(
+        "pessimistic-compare",
+        50,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+    CouponEvent conditionalEvent = couponEventRepository.save(CouponEvent.create(
+        "conditional-compare",
+        50,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    ConcurrentResult pessimisticResult = runConcurrent(
+        500,
+        index -> () -> couponIssueService.issue(pessimisticEvent.getId(), (long) index + 10000)
+    );
+    couponIssueRepository.deleteAllInBatch();
+    couponIssueRequestRepository.deleteAllInBatch();
+
+    ConcurrentResult conditionalResult = runConcurrent(
+        500,
+        index -> () -> conditionalCouponIssueService.issue(conditionalEvent.getId(), (long) index + 20000)
+    );
+
+    CouponEvent pessimisticReloaded = couponEventRepository.findById(pessimisticEvent.getId()).orElseThrow();
+    CouponEvent conditionalReloaded = couponEventRepository.findById(conditionalEvent.getId()).orElseThrow();
+
+    assertThat(pessimisticResult.successCount()).isEqualTo(50);
+    assertThat(conditionalResult.successCount()).isEqualTo(50);
+    assertThat(pessimisticReloaded.getIssuedQuantity()).isEqualTo(50);
+    assertThat(conditionalReloaded.getIssuedQuantity()).isEqualTo(50);
   }
 
   @Test
@@ -131,9 +225,26 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
     assertThat(duplicateCount).isGreaterThan(1);
   }
 
+  @Test
+  void 낙관적락구현은_충돌이_발생하면_재시도하고_일부는_재시도초과로_실패할_수_있다() throws InterruptedException {
+    CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
+        "optimistic-conflict",
+        200,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    ConcurrentResult result = runConcurrent(200, index -> () -> optimisticCouponIssueService.issue(couponEvent.getId(), (long) index + 30000));
+    CouponEvent reloaded = couponEventRepository.findById(couponEvent.getId()).orElseThrow();
+
+    assertThat(result.failureCount(ErrorCode.CONFLICT_RETRY_EXCEEDED)).isGreaterThan(0);
+    assertThat(result.successCount()).isLessThan(200);
+    assertThat(reloaded.getIssuedQuantity()).isEqualTo((int) couponIssueRepository.count());
+    assertThat(reloaded.getIssuedQuantity()).isLessThanOrEqualTo(200);
+  }
+
   private ConcurrentResult runConcurrent(int totalRequests, IndexedTaskFactory taskFactory) throws InterruptedException {
-    int poolSize = Math.min(totalRequests, 64);
-    ExecutorService executorService = Executors.newFixedThreadPool(poolSize);
+    ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
     CountDownLatch ready = new CountDownLatch(totalRequests);
     CountDownLatch start = new CountDownLatch(1);
     CountDownLatch done = new CountDownLatch(totalRequests);
@@ -160,12 +271,12 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
       });
     }
 
-    assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(ready.await(20, TimeUnit.SECONDS)).isTrue();
     start.countDown();
-    assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
+    assertThat(done.await(120, TimeUnit.SECONDS)).isTrue();
 
     executorService.shutdown();
-    assertThat(executorService.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(executorService.awaitTermination(20, TimeUnit.SECONDS)).isTrue();
 
     return new ConcurrentResult(success.get(), failures);
   }

@@ -31,10 +31,14 @@ public class UnsafeCouponIssueService {
       throw new BusinessException(ErrorCode.ALREADY_ISSUED);
     }
 
+    if (couponEvent.isSoldOut()) {
+      throw new BusinessException(ErrorCode.SOLD_OUT);
+    }
+
     // 비교용 코드다. race condition을 재현하기 위해 의도적으로 경쟁 구간을 넓힌다.
     LockSupport.parkNanos(DEMO_RACE_WINDOW_NANOS);
 
-    couponEvent.issueOne(now);
+    couponEventRepository.forceIncrementIssuedQuantity(couponEventId);
     unsafeCouponIssueRepository.save(UnsafeCouponIssue.create(couponEventId, userId, now));
   }
 }

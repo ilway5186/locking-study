@@ -8,6 +8,8 @@ public enum ErrorCode {
   ISSUE_PERIOD_CLOSED(HttpStatus.BAD_REQUEST, "COUPON-ISSUE-400", "발급 기간이 아닙니다."),
   SOLD_OUT(HttpStatus.CONFLICT, "COUPON-ISSUE-409", "쿠폰 재고가 소진되었습니다."),
   ALREADY_ISSUED(HttpStatus.CONFLICT, "COUPON-ISSUE-410", "이미 쿠폰을 발급받았습니다."),
+  DUPLICATE_REQUEST_IN_PROGRESS(HttpStatus.CONFLICT, "COUPON-ISSUE-411", "같은 idempotency 요청이 아직 처리 중입니다."),
+  CONFLICT_RETRY_EXCEEDED(HttpStatus.CONFLICT, "COUPON-ISSUE-412", "동시성 충돌 재시도 한도를 초과했습니다."),
   INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "COMMON-500", "서버 내부 오류가 발생했습니다.");
 
   private final HttpStatus status;

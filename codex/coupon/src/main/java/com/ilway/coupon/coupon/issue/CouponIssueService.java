@@ -2,14 +2,16 @@ package com.ilway.coupon.coupon.issue;
 
 import com.ilway.coupon.common.exception.BusinessException;
 import com.ilway.coupon.common.exception.ErrorCode;
-import com.ilway.coupon.coupon.event.CouponEvent;
-import com.ilway.coupon.coupon.event.CouponEventRepository;
 import com.ilway.coupon.coupon.issue.api.CouponIssueResponse;
 import com.ilway.coupon.coupon.issue.api.UserCouponIssueResponse;
+import com.ilway.coupon.coupon.issue.request.CouponIssueFailureReason;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequest;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestClaim;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestClaimType;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestService;
 import java.time.LocalDateTime;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,31 +19,42 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class CouponIssueService {
 
-  private final CouponEventRepository couponEventRepository;
   private final CouponIssueRepository couponIssueRepository;
+  private final CouponIssueRequestService couponIssueRequestService;
+  private final PessimisticCouponIssueProcessor pessimisticCouponIssueProcessor;
 
-  @Transactional
   public CouponIssueResponse issue(Long couponEventId, Long userId) {
-    // 이 SELECT ... FOR UPDATE 시점부터 coupon_event 행에 배타 락이 걸리고, 트랜잭션 종료 시 풀린다.
-    CouponEvent couponEvent = couponEventRepository.findByIdForUpdate(couponEventId)
-        .orElseThrow(() -> new BusinessException(ErrorCode.COUPON_EVENT_NOT_FOUND));
+    return issue(couponEventId, userId, null);
+  }
 
-    LocalDateTime now = LocalDateTime.now();
-    couponEvent.validateIssuableAt(now);
+  public CouponIssueResponse issue(Long couponEventId, Long userId, String idempotencyKey) {
+    CouponIssueRequestClaim claim = couponIssueRequestService.claim(couponEventId, userId, idempotencyKey);
 
-    if (couponIssueRepository.existsByCouponEvent_IdAndUserId(couponEventId, userId)) {
-      throw new BusinessException(ErrorCode.ALREADY_ISSUED);
-    }
+    return switch (claim.type()) {
+      case NEW -> executeNewRequest(claim.requestId(), couponEventId, userId);
+      case SUCCESS_REPLAY -> reuseSuccess(claim.request());
+      case FAILURE_REPLAY -> throw claim.request().getFailureReason().toBusinessException();
+      case IN_PROGRESS_DUPLICATE -> throw new BusinessException(ErrorCode.DUPLICATE_REQUEST_IN_PROGRESS);
+    };
+  }
 
-    couponEvent.issueOne(now);
-
+  private CouponIssueResponse executeNewRequest(Long requestId, Long couponEventId, Long userId) {
     try {
-      // unique index는 애플리케이션 체크를 뚫고 들어온 중복 발급을 DB 레벨에서 마지막으로 차단한다.
-      CouponIssue couponIssue = couponIssueRepository.saveAndFlush(CouponIssue.create(couponEvent, userId, now));
-      return CouponIssueResponse.from(couponIssue);
-    } catch (DataIntegrityViolationException exception) {
-      throw new BusinessException(ErrorCode.ALREADY_ISSUED);
+      return pessimisticCouponIssueProcessor.issue(requestId, couponEventId, userId);
+    } catch (BusinessException exception) {
+      couponIssueRequestService.markFailed(requestId, CouponIssueFailureReason.from(exception.getErrorCode()));
+      throw exception;
+    } catch (Exception exception) {
+      couponIssueRequestService.markFailed(requestId, CouponIssueFailureReason.INTERNAL_ERROR);
+      throw exception;
     }
+  }
+
+  private CouponIssueResponse reuseSuccess(CouponIssueRequest request) {
+    Long issueId = request.getIssuedCouponIssueId();
+    CouponIssue couponIssue = couponIssueRepository.findById(issueId)
+        .orElseThrow(() -> new IllegalStateException("기존 발급 결과를 찾을 수 없습니다. issueId=" + issueId));
+    return CouponIssueResponse.reusedFrom(couponIssue);
   }
 
   @Transactional(readOnly = true)

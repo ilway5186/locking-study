@@ -1,6 +1,7 @@
 package com.ilway.coupon.coupon.event.api;
 
 import com.ilway.coupon.coupon.event.CouponEvent;
+import java.util.Map;
 import java.time.LocalDateTime;
 
 public record AdminCouponEventStatisticsResponse(
@@ -10,10 +11,25 @@ public record AdminCouponEventStatisticsResponse(
     int issuedQuantity,
     int remainingQuantity,
     long successCount,
+    long totalRequestCount,
+    long totalAttemptCount,
+    long successRequestCount,
+    long failureRequestCount,
+    long reusedRequestCount,
+    Map<String, Long> failureReasonCounts,
     String status
 ) {
 
-  public static AdminCouponEventStatisticsResponse from(CouponEvent couponEvent, long successCount, LocalDateTime now) {
+  public static AdminCouponEventStatisticsResponse from(
+      CouponEvent couponEvent,
+      long successCount,
+      long totalRequestCount,
+      long successRequestCount,
+      long failureRequestCount,
+      long reusedRequestCount,
+      Map<String, Long> failureReasonCounts,
+      LocalDateTime now
+  ) {
     return new AdminCouponEventStatisticsResponse(
         couponEvent.getId(),
         couponEvent.getName(),
@@ -21,6 +37,12 @@ public record AdminCouponEventStatisticsResponse(
         couponEvent.getIssuedQuantity(),
         couponEvent.remainingQuantity(),
         successCount,
+        totalRequestCount,
+        totalRequestCount + reusedRequestCount,
+        successRequestCount,
+        failureRequestCount,
+        reusedRequestCount,
+        failureReasonCounts,
         couponEvent.statusAt(now).name()
     );
   }

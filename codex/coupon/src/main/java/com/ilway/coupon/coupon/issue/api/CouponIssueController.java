@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -22,9 +23,10 @@ public class CouponIssueController {
   @PostMapping("/coupon-events/{couponEventId}/issues")
   public ApiResponse<CouponIssueResponse> issue(
       @PathVariable Long couponEventId,
+      @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
       @Valid @RequestBody IssueCouponRequest request
   ) {
-    return ApiResponse.success(couponIssueService.issue(couponEventId, request.userId()));
+    return ApiResponse.success(couponIssueService.issue(couponEventId, request.userId(), idempotencyKey));
   }
 
   @GetMapping("/users/{userId}/coupon-issues")

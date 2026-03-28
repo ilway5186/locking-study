@@ -1,52 +1,59 @@
-# 선착순 쿠폰 발급 시스템
+# 선착순 쿠폰 발급 시스템 - 2차 확장
 
 ## 1. 프로젝트 개요
 
-이 프로젝트는 `Spring Boot + MySQL`만으로 어디까지 안전한 동시성 제어가 가능한지 학습하기 위한 토이 프로젝트다.
+이 프로젝트는 `Spring Boot + MySQL`만으로 동시성 제어를 어디까지 안전하게 다룰 수 있는지 학습하기 위한 토이 프로젝트다.
 
-핵심 주제는 두 가지다.
+1차의 목표는 아래 두 문제를 분리해서 이해하는 것이었다.
 
-- 총 발급 수량을 절대 초과하지 않게 막기
-- 같은 사용자가 같은 이벤트에서 중복 발급받지 못하게 막기
+- 총 발급 수량 초과 방지
+- 같은 사용자 중복 발급 방지
 
-이 둘은 비슷해 보이지만 실제로는 다른 문제다.
+2차의 목표는 여기서 한 단계 더 나아간다.
 
-- 수량 초과 방지는 `공유 자원(coupon_event)`에 대한 동시 수정 문제다.
-- 중복 발급 방지는 `중복 데이터(coupon_issue)` 생성 문제다.
+- 같은 API 요청의 재시도를 멱등하게 처리하기
+- 요청 이력을 남겨 실패 사유와 통계를 분석하기
+- DB 한 대에서 수량 제어 방식을 3가지로 비교하기
+  - 1차 safe: 비관적 락
+  - 2차 safe 비교: 조건부 UPDATE
+  - 2차 실험: 낙관적 락 + 재시도
 
-그래서 최종 구현은 아래 조합을 사용했다.
+즉, 이번 단계의 핵심은 단순 기능 추가가 아니라 아래 질문에 답할 수 있게 만드는 것이다.
 
-- 수량 초과 방지: `SELECT ... FOR UPDATE` 기반 비관적 락
-- 사용자 중복 발급 방지: `coupon_issue(coupon_event_id, user_id)` unique index
+- 왜 사용자 중복 발급 방지와 API 멱등성은 다른 문제인가?
+- 요청 이력이 왜 운영 통계와 장애 분석에 필요한가?
+- 왜 조건부 UPDATE는 락 구간이 짧아질 수 있는가?
+- 왜 낙관적 락은 충돌 감지 이후 재시도가 필요하다고 말하는가?
+- 안전성과 병목 사이에서 어떤 trade-off가 생기는가?
 
-현재 프로젝트는 처음에 거의 빈 Spring Boot 골격이었고, 기존 구조를 갈아엎지 않고 그 위에 필요한 최소 구조만 추가했다.
+## 2. 1차와 2차의 차이
 
-- 기존 상태: `CouponApplication`, 기본 `build.gradle`, `application.yaml`
-- 추가한 것: `Web/JPA/MySQL/Validation/Testcontainers`, 도메인/API/테스트/README
+### 1차에서 한 것
 
-## 2. 이 프로젝트로 배울 수 있는 것
+- `coupon_event`를 `PESSIMISTIC_WRITE`로 잠가 초과 발급 방지
+- `coupon_issue(coupon_event_id, user_id)` unique index로 같은 유저 중복 발급 방지
+- unsafe 비교 구현으로 oversell / same user duplicate 재현
 
-- `@Transactional`만 붙인다고 동시성 문제가 해결되지 않는 이유
-- 일반 조회와 `SELECT ... FOR UPDATE`의 차이
-- 비관적 락이 정확히 언제 걸리고 언제 풀리는지
-- unique index가 중복 발급 방지에서 왜 중요한지
-- 수량 차감 문제와 중복 발급 문제가 왜 분리되어야 하는지
-- 단위 테스트 / 통합 테스트 / 동시성 테스트를 어떻게 나눠야 하는지
-- Spring + MySQL 조합의 장점과 한계
+### 2차에서 추가한 것
 
-## 3. 핵심 비즈니스 규칙
+- `Idempotency-Key` 헤더 기반 멱등성
+- `coupon_issue_request` 요청 이력 테이블
+- 성공 / 실패 / 재사용 횟수 / 실패 사유 통계
+- 조건부 UPDATE 비교용 safe 구현
+- `@Version` 기반 낙관적 락 실험 구현
+- 단위 / 통합 / 동시성 테스트 확장
 
-1. 쿠폰 이벤트에는 총 발급 수량이 있다.
-2. 한 사용자는 같은 이벤트에서 쿠폰을 최대 1개만 발급받을 수 있다.
-3. 동시에 많은 요청이 들어와도 총 발급량을 초과하면 안 된다.
-4. 중복 발급이 발생하면 안 된다.
-5. 발급 시작 시간 전 / 종료 시간 후에는 발급되면 안 된다.
-6. 실패 사유는 구분되어야 한다.
-7. 동시성 테스트에서 결과가 일관되어야 한다.
+### 이번 단계에서 가장 중요한 차이
 
-## 4. 아키텍처 개요
+1차는 "같은 유저가 두 번 발급받는가"를 막는 단계였다.  
+2차는 "같은 HTTP 요청을 두 번 보냈을 때 같은 요청으로 볼 것인가"까지 다룬다.
 
-### 패키지 구조
+둘은 전혀 같은 문제가 아니다.
+
+- 사용자 중복 발급 방지: 비즈니스 규칙
+- API 멱등성: 전송 재시도 / 네트워크 중복 / 클라이언트 재호출 제어
+
+## 3. 현재 패키지 구조
 
 ```text
 com.ilway.coupon
@@ -57,30 +64,49 @@ com.ilway.coupon
 │  ├─ event
 │  │  └─ api
 │  └─ issue
-│     └─ api
+│     ├─ api
+│     └─ request
 └─ comparison
+   ├─ conditional
+   ├─ optimistic
    └─ unsafe
 ```
 
-### 계층 구조
+### 왜 이렇게 나눴는가
 
-- Controller: HTTP 요청/응답 처리
-- Service: 트랜잭션 경계와 비즈니스 규칙 처리
-- Repository: JPA + 락 쿼리 처리
-- Entity: 도메인 상태와 핵심 규칙 보유
+- 기존 1차 운영 경로는 `coupon.issue` 아래에 유지했다.
+- 요청 이력은 발급 도메인에 밀접하므로 `coupon.issue.request`로 붙였다.
+- 비교용 구현은 `comparison` 아래로 분리해 차이가 보이게 했다.
+- 공통화를 과하게 하지 않고, 전략별 흐름 차이가 코드에서 드러나도록 유지했다.
 
-### 요청 흐름
+## 4. 1차 safe 구현 복습
 
-1. `POST /api/coupon-events/{id}/issues` 요청 수신
-2. `CouponIssueService.issue()` 진입
-3. `coupon_event`를 `PESSIMISTIC_WRITE`로 조회
-4. 발급 기간 검증
-5. 중복 발급 여부 조회
-6. `issuedQuantity` 증가
-7. `coupon_issue` 저장
-8. 커밋 시 락 해제
+기존 운영용 주력 경로는 그대로 유지했다.
 
-## 5. DB 스키마 설명
+흐름:
+
+1. `coupon_event`를 `SELECT ... FOR UPDATE`로 조회
+2. 발급 기간 검증
+3. 같은 유저 중복 발급 여부 조회
+4. `issued_quantity` 증가
+5. `coupon_issue` 저장
+6. 커밋 시 락 해제
+
+장점:
+
+- `조회 -> 검증 -> 변경` 흐름이 가장 직관적이다.
+- 락 시점과 해제 시점을 설명하기 쉽다.
+- 학습용으로 이해가 쉽고 디버깅도 편하다.
+
+단점:
+
+- 같은 이벤트에 대한 요청이 많아지면 직렬화가 심해진다.
+- 이벤트 행 하나가 병목 지점이 되기 쉽다.
+
+이번 2차에서도 public API의 기본 발급 경로는 여전히 이 방식을 사용한다.  
+이유는 학습 목적상 가장 설명하기 쉽고, 멱등성/요청 이력/실패 사유 분기와 결합했을 때도 읽기 흐름이 가장 명확하기 때문이다.
+
+## 5. DB 스키마
 
 ### coupon_event
 
@@ -93,7 +119,8 @@ create table coupon_event (
   start_at datetime(6) not null,
   end_at datetime(6) not null,
   created_at datetime(6) not null,
-  updated_at datetime(6) not null
+  updated_at datetime(6) not null,
+  version bigint not null
 );
 ```
 
@@ -113,12 +140,54 @@ create index idx_coupon_issue_user_id on coupon_issue(user_id);
 create index idx_coupon_issue_event_id on coupon_issue(coupon_event_id);
 ```
 
+### coupon_issue_request
+
+```sql
+create table coupon_issue_request (
+  id bigint auto_increment primary key,
+  idempotency_key varchar(100) not null,
+  coupon_event_id bigint not null,
+  user_id bigint not null,
+  request_status varchar(20) not null,
+  failure_reason varchar(50) null,
+  issued_coupon_issue_id bigint null,
+  reused_count int not null,
+  created_at datetime(6) not null,
+  updated_at datetime(6) not null,
+  constraint uk_coupon_issue_request_event_user_key
+    unique (coupon_event_id, user_id, idempotency_key)
+);
+
+create index idx_coupon_issue_request_event_status
+  on coupon_issue_request(coupon_event_id, request_status);
+
+create index idx_coupon_issue_request_event_failure
+  on coupon_issue_request(coupon_event_id, failure_reason);
+```
+
 ### 왜 이 제약조건이 중요한가
 
-- `not null`: 수량/시간 컬럼의 무결성을 강제한다.
-- `unique(coupon_event_id, user_id)`: 같은 유저가 같은 이벤트에서 2번 발급되는 것을 DB가 최종 차단한다.
-- `coupon_event_id` 인덱스: 이벤트별 발급 건수 조회를 빠르게 만든다.
-- `user_id` 인덱스: 내 발급 이력 조회를 빠르게 만든다.
+- `coupon_issue` unique index: 같은 유저 중복 발급의 마지막 방어선
+- `coupon_issue_request` unique index: 같은 사용자 + 같은 이벤트 + 같은 idempotency key를 하나의 논리 요청으로 묶음
+- `not null`: 수량 / 시간 / 상태 컬럼 무결성 보장
+- `event/status`, `event/failure` 인덱스: 관리자 통계 조회 시 집계 비용 감소
+
+### 왜 request history는 coupon_event FK를 두지 않았는가
+
+의도적으로 두지 않았다.
+
+이유:
+
+- `EVENT_NOT_FOUND` 같은 실패도 요청 이력에 남기고 싶다.
+- 요청 로그는 비즈니스 엔터티보다 더 오래 남을 수 있다.
+- 요청 이력은 "결과 분석용 로그" 성격이 강해서 참조 무결성보다 분석 가능성이 더 중요했다.
+
+이 부분은 trade-off다.
+
+- FK 장점: 참조 무결성 강화
+- FK 단점: 존재하지 않는 이벤트 요청을 기록하기 어려움
+
+이번 2차에서는 실패 분석 목적을 우선했다.
 
 ## 6. API
 
@@ -130,20 +199,38 @@ create index idx_coupon_issue_event_id on coupon_issue(coupon_event_id);
 {
   "name": "오픈 기념 이벤트",
   "totalQuantity": 100,
-  "startAt": "2026-03-26T20:00:00",
-  "endAt": "2026-03-26T21:00:00"
+  "startAt": "2026-03-28T20:00:00",
+  "endAt": "2026-03-28T21:00:00"
 }
 ```
 
 ### 쿠폰 발급
 
 - `POST /api/coupon-events/{couponEventId}/issues`
+- Header: `Idempotency-Key` 선택 사항
 
 ```json
 {
   "userId": 1
 }
 ```
+
+### 발급 응답 예시
+
+```json
+{
+  "success": true,
+  "data": {
+    "issueId": 1,
+    "couponEventId": 1,
+    "userId": 1,
+    "issuedAt": "2026-03-28T20:00:01",
+    "resultType": "ISSUED"
+  }
+}
+```
+
+같은 키 재요청의 성공 재사용이면 `resultType`은 `REUSED`가 된다.
 
 ### 이벤트 조회
 
@@ -157,124 +244,168 @@ create index idx_coupon_issue_event_id on coupon_issue(coupon_event_id);
 
 - `GET /api/admin/coupon-events/{couponEventId}/statistics`
 
-현재 1차 버전의 관리자 통계는 `성공 건수/발급 수량/잔여 수량` 중심이다.  
-실패 건수와 실패 사유별 집계는 `요청 이력 테이블`이 필요하므로 2차 확장으로 남겼다.
+응답에는 아래가 포함된다.
 
-## 7. 동시성 문제 설명
+- 성공 발급 수
+- 총 논리 요청 수
+- 총 시도 수
+- 성공 요청 수
+- 실패 요청 수
+- 멱등 재사용 횟수
+- 실패 사유별 집계
 
-### 왜 `@Transactional`만으로는 부족한가
+## 7. 왜 Header 기반 Idempotency-Key를 선택했는가
 
-`@Transactional`은 "여러 쿼리를 하나의 트랜잭션으로 묶는 기능"이지, 자동으로 모든 요청을 직렬화해 주는 기능이 아니다.
+이번 2차에서는 `requestId`를 body에 넣지 않고 `Idempotency-Key` 헤더를 선택했다.
 
-예를 들어 아래 흐름은 unsafe 하다.
+이유:
 
-1. 트랜잭션 A가 이벤트 조회
-2. 트랜잭션 B도 같은 이벤트 조회
-3. 둘 다 `issuedQuantity < totalQuantity`라고 판단
-4. 둘 다 발급 성공 처리
+- 비즈니스 데이터(`userId`)와 전송 재시도 식별자(멱등성 키)를 분리할 수 있다.
+- HTTP API에서 멱등 키는 헤더로 두는 편이 더 자연스럽다.
+- 이후 결제 / 예약 API로 확장할 때도 같은 패턴을 가져가기 쉽다.
+- 기존 request body를 깨지 않고 API를 확장할 수 있다.
 
-즉, `조회 -> 검증 -> 수정` 사이에 다른 트랜잭션이 끼어들 수 있다.
+추가로, 헤더가 없으면 서버가 내부적으로 임의 키를 생성해 요청 이력은 남긴다.  
+다만 이 경우에는 "재시도 간 같은 키 보장"이 없으므로 멱등성 보장은 제공되지 않는다.
 
-### 일반 조회와 `SELECT ... FOR UPDATE` 차이
+즉:
 
-- 일반 조회: 다른 트랜잭션도 같은 행을 읽고 수정 판단을 할 수 있다.
-- `SELECT ... FOR UPDATE`: 해당 행을 수정하려는 다른 트랜잭션이 대기한다.
+- 헤더 있음: 멱등성 사용
+- 헤더 없음: 기존 API 호환 유지, 단순 요청 이력만 기록
 
-이 프로젝트의 safe 구현은 `CouponEventRepository.findByIdForUpdate()`에서 이 락을 건다.
+## 8. 멱등성 정책
 
-### 비관적 락은 언제 걸리고 언제 풀리는가
+이번 단계에서는 정책을 단순하게 고정했다.
 
-`CouponIssueService.issue()`에서 아래 쿼리가 실행되는 순간 락이 걸린다.
+### 정책
 
-- `findByIdForUpdate(couponEventId)`
+- 같은 `couponEventId + userId + idempotencyKey`
+  - 처음 요청: 새 요청으로 처리
+  - 이전 성공 존재: 같은 성공 결과 재사용
+  - 이전 실패 존재: 같은 실패 결과 재사용
+  - 아직 처리 중: `DUPLICATE_REQUEST_IN_PROGRESS` 반환
 
-그리고 락은 아래 시점까지 유지된다.
+### 왜 실패도 재사용하는가
 
-- 트랜잭션 `commit`
-- 또는 `rollback`
+이번 2차의 초점은 멱등성 보장과 이력 분석이다.  
+실패한 같은 키를 다시 새로 처리하게 열어 두면 "같은 논리 요청"의 경계가 흐려진다.
 
-즉, 락 구간은 대략 다음과 같다.
+그래서 이번 프로젝트는 가장 단순한 정책을 채택했다.
 
-1. `SELECT ... FOR UPDATE`
-2. 기간 검증
-3. 중복 발급 검증
-4. 수량 증가
-5. 발급 이력 저장
-6. 커밋
-7. 락 해제
+- 같은 키는 항상 같은 논리 요청
+- 성공도 재사용
+- 실패도 재사용
 
-### unique index가 왜 중요한가
+이 정책은 실무의 모든 상황에 정답은 아니다.  
+예를 들어 결제 시스템에서는 `IN_PROGRESS`, `FAILED`, `CONFIRMED`, `COMPENSATED` 같은 더 복잡한 상태 전이가 필요할 수 있다.  
+하지만 학습용 2차에서는 이 단순 정책이 가장 이해하기 쉽다.
 
-애플리케이션에서 먼저 `existsBy...`로 중복 발급을 검사해도, 그 검사는 여전히 코드 레벨 검사다.
+## 9. 요청 이력 테이블이 왜 필요한가
 
-DB unique index는 마지막 안전장치다.
+`coupon_issue_request`는 단순 로그 테이블이 아니다.
 
-- 코드가 잘못되더라도
-- 다른 경로에서 insert가 들어오더라도
-- 경쟁 상황에서 두 요청이 거의 동시에 들어오더라도
+이 테이블은 동시에 3가지 역할을 한다.
 
-최종적으로 DB가 중복 row 생성을 막아준다.
+1. 중복 요청 판별
+- 같은 key의 중복 insert를 unique constraint로 차단
 
-### "수량 차감"과 "중복 발급 방지"는 왜 다른 문제인가
+2. 결과 재사용
+- 이미 성공한 요청이면 같은 발급 결과를 다시 반환
+- 이미 실패한 요청이면 같은 실패를 다시 반환
 
-- 수량 차감: `coupon_event.issued_quantity`라는 공유 숫자를 안전하게 증가시키는 문제
-- 중복 발급 방지: `(coupon_event_id, user_id)` 조합이 중복되지 않게 보장하는 문제
+3. 운영 통계 / 장애 분석
+- 실패 건수 집계
+- 실패 사유 집계
+- 멱등 재사용 횟수 집계
 
-하나의 락이나 하나의 if 문으로 두 문제를 동시에 해결했다고 생각하면 설계가 흔들리기 쉽다.
+1차에서는 성공 발급만 셀 수 있었다.  
+2차에서는 "왜 실패했는지"를 관리자 통계로 올릴 수 있게 됐다.
 
-이 프로젝트는 두 문제를 분리했다.
+## 10. 실패 사유 분류
 
-- 수량: 비관적 락
-- 중복: unique index + 선행 조회
+현재 요청 이력에서 관리하는 실패 사유는 아래와 같다.
 
-## 8. unsafe 구현 vs safe 구현
+- `EVENT_NOT_FOUND`
+- `NOT_IN_ISSUE_PERIOD`
+- `ALREADY_ISSUED`
+- `SOLD_OUT`
+- `CONFLICT_RETRY_EXCEEDED`
+- `INTERNAL_ERROR`
 
-### A. unsafe 비교용 구현
+별도로 API 에러 코드에는 아래도 존재한다.
 
-위치:
+- `DUPLICATE_REQUEST_IN_PROGRESS`
 
-- `comparison.unsafe.UnsafeCouponIssueService`
+이 코드는 "같은 멱등 키 요청이 아직 끝나지 않음"을 뜻한다.  
+논리 요청 자체가 최종 실패한 것은 아니므로, 현재 요청 이력의 terminal failure reason에는 포함하지 않았다.
+
+## 11. 세 가지 수량 제어 방식 비교
+
+### A. 비관적 락
+
+핵심 쿼리:
+
+```sql
+select *
+from coupon_event
+where id = ?
+for update;
+```
 
 특징:
 
-- 일반 `findById()` 조회
-- `exists` 체크 후 저장
-- 별도 unique 제약 없음
-- 비교 테스트를 위해 race window를 넓히는 짧은 지연 포함
+- 락을 먼저 잡고 검증과 변경을 모두 수행
+- 같은 이벤트 행 기준으로 직렬화
 
-이 구현은 운영용이 아니다.
+### B. 조건부 UPDATE
 
-학습 포인트:
+핵심 쿼리:
 
-- `@Transactional`만 있어도 oversell이 생길 수 있다.
-- 같은 유저의 동시 요청에서 중복 발급이 생길 수 있다.
+```sql
+update coupon_event
+set issued_quantity = issued_quantity + 1,
+    version = version + 1
+where id = ?
+  and issued_quantity < total_quantity;
+```
 
-### B. safe 최종 구현
+특징:
 
-위치:
+- 수량 증가 자체를 원자적 UPDATE 한 번으로 처리
+- 락을 오래 쥐는 대신 UPDATE 결과 행 수로 성공/실패를 해석
 
-- `coupon.issue.CouponIssueService`
+### C. 낙관적 락
 
-전략:
+핵심 아이디어:
 
-1. `coupon_event`를 `PESSIMISTIC_WRITE`로 잠근다.
-2. 잠금 상태에서 발급 기간을 확인한다.
-3. 잠금 상태에서 중복 발급 여부를 확인한다.
-4. `issuedQuantity`를 증가시킨다.
-5. `coupon_issue` 저장 시 unique index로 최종 방어한다.
+- `coupon_event.version`으로 충돌 감지
+- 읽은 뒤 수정하다가 다른 트랜잭션이 먼저 커밋하면 optimistic lock 예외 발생
+- 서비스 계층에서 재시도
 
-왜 이 전략을 택했는가:
+## 12. 세 방식 비교표
 
-- 학습용으로 가장 이해하기 쉽다.
-- 락이 언제 걸리는지 설명하기 쉽다.
-- `SELECT ... FOR UPDATE`를 직접 보여줄 수 있다.
-- MySQL 단일 DB 환경에서 단순하고 안전하다.
+| 항목 | 비관적 락 | 조건부 UPDATE | 낙관적 락 |
+| --- | --- | --- | --- |
+| 수량 초과 방지 안전성 | 높음 | 높음 | 높음(재시도 전제) |
+| 같은 유저 중복 방지 | `coupon_issue` unique index | `coupon_issue` unique index | `coupon_issue` unique index |
+| 멱등성 결합 난이도 | 가장 쉬움 | 중간 | 가장 어려움 |
+| 락/충돌 발생 시점 | 조회 시점부터 락 | UPDATE 시점에 짧게 | flush/commit 시 optimistic conflict |
+| 병목 가능성 | 높음 | 중간 | 충돌 많으면 재시도 비용 큼 |
+| 코드 가독성 | 가장 좋음 | 분기 해석이 늘어남 | 재시도까지 포함되면 복잡 |
+| 테스트 난이도 | 비교적 쉬움 | 실패 해석 검증 필요 | 충돌 재현과 재시도 검증 필요 |
+| 실무 확장성 | 단일 DB hot row에 약함 | 고부하 재고 차감에 유리할 수 있음 | read-heavy / 충돌 적은 경우 적합 |
 
-## 9. 조건부 UPDATE 방식과 비관적 락 방식의 차이
+### 요약
 
-### 조건부 UPDATE 방식
+- 학습용으로 가장 이해하기 쉬운 방식: 비관적 락
+- 고부하 hot row에서 더 유리할 수 있는 방식: 조건부 UPDATE
+- 충돌이 적고 재시도 관리가 가능할 때 실험 가치가 있는 방식: 낙관적 락
 
-예시:
+## 13. 왜 조건부 UPDATE가 락 구간이 짧다고 말하는가
+
+비관적 락은 `SELECT ... FOR UPDATE` 이후 커밋까지 이벤트 행을 잡는다.
+
+반면 조건부 UPDATE는 실제 공유 자원 변경을 아래 한 문장에 집중시킨다.
 
 ```sql
 update coupon_event
@@ -283,191 +414,189 @@ where id = ?
   and issued_quantity < total_quantity;
 ```
 
-장점:
+이 말은 "락이 아예 없다"는 뜻이 아니다.  
+DB는 UPDATE 동안 필요한 잠금을 사용한다.  
+다만 애플리케이션 관점에서는 `조회 -> 검증 -> 저장` 전체를 길게 잠그지 않고, 공유 숫자 증가를 SQL 한 번으로 원자화한다는 점이 다르다.
 
-- 쿼리 한 번으로 수량 제어 가능
-- 락 범위가 상대적으로 짧을 수 있음
+### 대신 복잡해지는 점
 
-단점:
+- UPDATE 결과가 0일 때 왜 실패했는지 해석 로직이 필요하다
+- 기간 검증은 별도로 해야 한다
+- 사용자 중복 발급은 여전히 다른 제약으로 막아야 한다
+- 멱등성/요청 이력까지 결합하면 분기 설명이 길어진다
 
-- 중복 발급 문제를 따로 해결해야 함
-- 읽기 흐름이 덜 직관적이라 학습 초기에 이해가 어렵다
-- 기간 검증/상태 검증/실패 사유 분기가 늘어나면 코드 설명이 복잡해진다
+즉, 성능 여지가 늘어나는 대신 코드 설명은 어려워진다.
 
-### 비관적 락 방식
+## 14. 왜 낙관적 락은 재시도가 필요한가
 
-장점:
+낙관적 락은 충돌을 막는 방식이 아니라 감지하는 방식이다.
 
-- `조회 -> 검증 -> 변경` 흐름이 자연스럽다
-- 락 구간이 명확하다
-- 학습용으로 설명하기 가장 쉽다
+예를 들어:
 
-단점:
+1. 트랜잭션 A가 version 3 읽음
+2. 트랜잭션 B도 version 3 읽음
+3. A가 먼저 커밋해서 version 4가 됨
+4. B가 커밋하려 하면 "내가 읽은 version 3이 더 이상 유효하지 않다"며 실패
 
-- 같은 이벤트에 대한 동시 요청이 많으면 직렬화가 심해진다
-- 이벤트 단위로 병목이 생길 수 있다
+따라서 낙관적 락은 보통 아래가 같이 따라온다.
 
-### 왜 1차 버전은 비관적 락을 선택했는가
+- optimistic lock 예외
+- 재시도 정책
+- 재시도 횟수 제한
 
-이번 1차의 목표는 "가장 고성능"이 아니라 "왜 안전한지 명확히 설명 가능한 구조"다.  
-그래서 이 프로젝트에서는 비관적 락이 가장 적절하다.
+이번 프로젝트는 가장 단순하게 `3회 재시도` 정책을 사용했다.  
+3회 안에 해결되지 않으면 `CONFLICT_RETRY_EXCEEDED`로 실패 처리한다.
 
-## 10. 낙관적 락을 선택하지 않은 이유
+### 왜 1차에서는 쓰지 않았고 2차에서 실험했는가
 
-낙관적 락은 충돌 시 재시도가 필요하고, 학습 초기에 보면 "실패 후 다시 시도"까지 같이 이해해야 한다.
+1차의 핵심은 "락이 왜 필요한지"를 먼저 이해하는 것이었다.  
+낙관적 락은 충돌 감지 이후 재시도까지 같이 설명해야 하므로 초기에 학습 부담이 크다.
 
-이번 주제는 먼저 아래를 명확히 배우는 데 있다.
+2차에서는 이미 1차의 안전한 기준점을 확보했기 때문에 비교 실험 가치가 생긴다.
 
-- 동시 조회가 왜 위험한지
-- DB 락이 어떻게 직렬화를 만드는지
-- unique index가 어떤 보호막인지
+## 15. 운영용 주력 방식은 무엇으로 봤는가
 
-그래서 1차 버전에서는 낙관적 락보다 비관적 락이 학습 효율이 높다.
-
-## 11. requestId / idempotencyKey를 1차에 넣지 않은 이유
-
-이번 1차에서는 넣지 않았다.
+현재 프로젝트의 기본 운영 경로는 여전히 `비관적 락 + 요청 이력 + unique index`다.
 
 이유:
 
-- 핵심 학습 주제가 DB 동시성 제어이기 때문이다.
-- idempotencyKey를 넣으면 요청 이력 저장, TTL 정책, 중복 재시도 처리까지 함께 설계해야 한다.
-- 이건 2차 확장 주제로 분리하는 것이 학습 흐름상 좋다.
+- 가장 이해하기 쉽다
+- 멱등성 / 실패 분기 / 관리자 통계와 결합했을 때 흐름이 가장 명확하다
+- 학습용으로 "왜 안전한가"를 설명하기 쉽다
 
-즉, 현재 중복 발급 방지는 "사용자 기준 중복"만 해결하고, "같은 API 요청의 멱등성"은 다음 단계로 남겼다.
+다만 실무에서 hot event가 심한 경우에는 조건부 UPDATE 방식이 더 유리할 수 있다.  
+그래서 이번 2차에서는 조건부 UPDATE를 "비교용 safe 구현"으로 반드시 추가했다.
 
-## 12. 테스트 시나리오
+즉, 현재 판단은 아래와 같다.
+
+- 이 프로젝트의 주력 설명 경로: 비관적 락
+- 성능 관점에서 더 검토할 가치가 큰 방식: 조건부 UPDATE
+- 실험/비교 가치가 큰 방식: 낙관적 락
+
+## 16. 관리자 통계에서 무엇을 볼 수 있게 되었는가
+
+1차:
+
+- 성공 건수
+- 발급 수량
+- 잔여 수량
+
+2차:
+
+- 총 논리 요청 수
+- 총 시도 수
+- 성공 요청 수
+- 실패 요청 수
+- 실패 사유별 건수
+- 멱등 재사용 횟수
+
+이 차이가 중요한 이유는, 운영에서는 성공 수만 보는 것으로는 문제가 안 보이기 때문이다.
+
+예를 들어:
+
+- 실패가 갑자기 `SOLD_OUT`으로 몰리는지
+- `ALREADY_ISSUED`가 비정상적으로 많은지
+- 멱등 재사용이 급증하는지
+- 낙관적 락에서 `CONFLICT_RETRY_EXCEEDED`가 늘어나는지
+
+이런 지표가 있어야 병목과 UX 문제를 함께 볼 수 있다.
+
+## 17. 테스트 시나리오
 
 ### 단위 테스트
 
-- 이벤트 기간 판정
-- 발급 가능 여부
-- 수량 계산
-- 재고 소진 시 예외
+- 요청 이력 상태 전이
+- 실패 사유 분류
+- idempotency claim 정책
+- 조건부 UPDATE 실패 해석
+- 낙관적 락 재시도 정책
 
 ### 통합 테스트
 
-- 이벤트 생성 성공
-- 정상 발급
-- 중복 발급 실패
-- 수량 소진 후 실패
-- 발급 이력 조회
-- 관리자 통계 조회
+- 정상 발급 + 요청 이력 저장
+- 같은 idempotency key 재요청 시 성공 결과 재사용
+- 다른 key + 같은 userId 시 중복 발급 실패
+- 요청 이력 기반 관리자 통계 조회
+- 조건부 UPDATE 버전 정상 발급
+- 낙관적 락 버전의 중복 발급 실패 처리
 
 ### 동시성 테스트
 
-- safe: 수량 100개, 동시 요청 1000개 -> 성공 100 / 실패 900
-- safe: 동일 userId 100번 동시 요청 -> 성공 1 / 실패 99
-- safe: 여러 userId 동시 요청 -> 총 발급량 초과 없음
-- unsafe: oversell 발생 재현
-- unsafe: same user 중복 발급 재현
+- 같은 userId + 같은 idempotencyKey 100번 동시 요청
+- 서로 다른 userId 1000명 동시 요청
+- 비관적 락 vs 조건부 UPDATE 결과 비교
+- unsafe oversell / duplicate 재현
+- 낙관적 락 충돌 및 재시도 초과 검증
 
-## 13. 현재 검증 결과
+### 테스트 하네스에서 보강한 점
 
-`2026-03-26` 기준 로컬에서 아래 명령을 실행했다.
+- 가상 스레드를 사용해 동시성 테스트의 실제 시작 장벽을 맞췄다
+- `@DirtiesContext(AFTER_CLASS)`를 넣어 Testcontainers MySQL과 Spring context 재사용 충돌을 피했다
 
-```bash
-./gradlew test
-```
+## 18. 로컬에서 검증한 명령
 
-결과:
-
-- 단위 테스트 4개 실행, 모두 성공
-- MySQL/Testcontainers 기반 통합 테스트 6개는 Docker 데몬이 꺼져 있어 skip
-- MySQL/Testcontainers 기반 동시성 테스트 5개는 Docker 데몬이 꺼져 있어 skip
-
-즉, 테스트 코드는 모두 작성되어 있고, Docker Desktop만 실행하면 같은 명령으로 MySQL 기준 검증까지 가능하다.
-
-## 14. 실행 방법
-
-### 애플리케이션 실행
-
-로컬 MySQL을 준비한 뒤 아래 환경변수를 맞춘다.
-
-```bash
-DB_URL=jdbc:mysql://localhost:3306/coupon?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
-DB_USERNAME=root
-DB_PASSWORD=root
-```
-
-실행:
-
-```bash
-./gradlew bootRun
-```
-
-### 테스트 실행
-
-단위 테스트만 확인:
+`2026-03-28` 기준 아래 명령으로 전체 테스트를 실행했다.
 
 ```bash
 ./gradlew test
 ```
 
-통합 테스트와 동시성 테스트까지 실제 실행하려면 Docker Desktop을 켜서 Testcontainers가 MySQL 컨테이너를 띄울 수 있어야 한다.
+현재 환경에서는 Docker Desktop이 켜져 있어 Testcontainers 기반 통합 / 동시성 테스트까지 포함해 모두 통과했다.
 
-## 15. 향후 확장 방향
+## 19. 왜 비교용 엔드포인트를 따로 만들지 않았는가
 
-### 2차에서 바로 해볼 수 있는 것
+이번 2차에서는 `/issues/pessimistic`, `/issues/conditional`, `/issues/optimistic` 같은 외부 엔드포인트를 추가하지 않았다.
 
-- `requestId` 또는 `idempotencyKey` 도입
-- 요청 이력 테이블 추가 후 실패 건수 / 실패 사유 집계
-- 조건부 UPDATE 방식 버전 추가
-- 낙관적 락 실험 버전 추가
+이유:
 
-### 실무 확장 방향
+- public API를 전략별 실험용 URL로 오염시키고 싶지 않았다
+- 실제 비교 포인트는 서비스 / 테스트 계층에서 충분히 드러난다
+- 현재 프로젝트의 주력 운영 경로는 비관적 락 하나로 유지하는 편이 명확하다
 
-- Redis 분산 락 도입
-- 대기열/선착순 큐 도입
-- 비동기 이벤트 처리
-- 쿠폰 발급 요청 수집 후 백그라운드 처리
-- 이벤트 오픈 시점 트래픽 완충을 위한 rate limit
+대신 비교 구현은 내부 서비스와 동시성 테스트에서 나란히 검증한다.
 
-실무에서는 단일 DB 락만으로 버티기 어렵다.  
-하지만 그 전에 "DB 한 대에서 무엇이 안전하고 무엇이 unsafe 한지"를 이해하는 것이 먼저다.
+## 20. 이번 2차에서 새로 배운 점
 
-## 16. 포트폴리오 한 줄 요약
+1. 같은 유저 중복 발급과 API 멱등성은 다르다
+2. 요청 이력이 있어야 실패 사유와 재사용 횟수를 통계로 볼 수 있다
+3. 조건부 UPDATE는 락 구간이 짧을 수 있지만 코드 설명이 더 어려워진다
+4. 낙관적 락은 충돌 감지 후 재시도까지 설계해야 완성된다
+5. 동시성 제어 방식이 달라지면 테스트 전략도 같이 달라진다
+6. 새로운 동시성 장치를 추가하면 기존 비교용 경로에 부작용이 생길 수 있다
+   - 예: `@Version` 추가 후 unsafe 경로가 의도치 않게 안전해지는 문제
+   - 예: reused count 증가와 status update가 서로 덮어쓰는 문제
 
-`Spring Boot + MySQL 기반 선착순 쿠폰 발급 시스템을 구현하며, 비관적 락과 unique index를 이용해 초과 발급과 중복 발급을 방지하고 동시성 테스트로 검증한 프로젝트`
+## 21. 좌석 예매 / 결제 / 재고 시스템으로 확장될 때 이어지는 포인트
 
-## 17. 예상 면접 질문 5개
+이번 2차는 그 자체로 끝이 아니라, 좌석 예매나 결제 시스템의 입구다.
 
-### 1. `@Transactional`만으로 왜 동시성 문제가 해결되지 않나요?
+### 좌석 예매
 
-핵심 답변 포인트:
+- 좌석 한 개를 누가 선점했는지
+- 같은 예약 요청 재시도를 같은 요청으로 처리할지
+- 선점 실패 / 만료 / 취소 상태를 어떻게 관리할지
 
-- 트랜잭션은 원자성/일관성 경계를 주지만 자동 직렬화를 보장하지 않는다.
-- `조회 -> 검증 -> 수정` 사이에 다른 트랜잭션이 끼어들 수 있다.
-- 그래서 별도의 락 또는 원자적 갱신 쿼리가 필요하다.
+### 결제
 
-### 2. 일반 조회와 `SELECT ... FOR UPDATE`는 무엇이 다른가요?
+- 같은 결제 요청이 중복 전송되어도 1번만 승인되어야 함
+- idempotency key와 request history는 거의 필수
+- `IN_PROGRESS -> SUCCESS/FAILED/COMPENSATED` 같은 더 복잡한 상태 전이 필요
 
-핵심 답변 포인트:
+### 재고 차감
 
-- 일반 조회는 읽기만 하고 잠그지 않는다.
-- `FOR UPDATE`는 해당 행에 배타 락을 걸어 다른 수정 트랜잭션을 대기시킨다.
-- 이 프로젝트에서는 이벤트 행을 직렬화해서 oversell을 막았다.
+- hot item 재고 차감은 조건부 UPDATE 패턴이 자주 검토됨
+- 품절 직전 충돌과 실패 사유를 어떻게 분류할지 중요
 
-### 3. 락은 언제부터 언제까지 유지되나요?
+즉, 이번 2차의 멱등성 / 요청 이력 / 조건부 UPDATE / 낙관적 락 비교는 그대로 다음 도메인으로 이어진다.
 
-핵심 답변 포인트:
+## 22. 면접에서 말할 수 있는 포인트
 
-- `findByIdForUpdate()` 쿼리가 실행되는 순간부터 락이 걸린다.
-- 같은 트랜잭션 안에서 검증/수정/저장을 마친다.
-- 커밋 또는 롤백 시점에 락이 풀린다.
+- 1차에서는 비관적 락과 unique index로 oversell과 duplicate issue를 분리해서 해결했다
+- 2차에서는 idempotency key와 request history를 도입해 API 재시도 문제를 별도로 다뤘다
+- 요청 이력을 이용해 실패 사유 집계와 멱등 재사용 횟수 통계를 만들었다
+- 같은 DB 한 대에서 비관적 락, 조건부 UPDATE, 낙관적 락을 비교했고 trade-off를 테스트로 검증했다
+- `@Version` 같은 추가 안전장치가 기존 unsafe 비교 경로를 오염시키는 문제까지 겪었고, 이를 비교 실험 관점에서 다시 분리했다
 
-### 4. 왜 unique index가 필요한가요?
+## 23. 한 줄 요약
 
-핵심 답변 포인트:
-
-- 서비스 코드의 중복 체크는 보조 수단이다.
-- 최종적으로 DB가 중복 row를 허용하지 않아야 안전하다.
-- `(coupon_event_id, user_id)` unique가 중복 발급을 마지막으로 막는다.
-
-### 5. 왜 조건부 UPDATE 대신 비관적 락을 선택했나요?
-
-핵심 답변 포인트:
-
-- 1차 목표가 최고 성능이 아니라 학습 가능한 안전성 확보였다.
-- 비관적 락은 락 시점과 해제 시점을 설명하기 쉽다.
-- 조건부 UPDATE는 더 고성능일 수 있지만 기간 검증/실패 분기/중복 처리 설명이 복잡해진다.
+`Spring Boot + MySQL 기반 선착순 쿠폰 발급 시스템을 2차까지 확장하면서, 비관적 락/조건부 UPDATE/낙관적 락을 비교하고, Idempotency-Key와 요청 이력 테이블로 API 재시도와 실패 통계까지 다룬 프로젝트`

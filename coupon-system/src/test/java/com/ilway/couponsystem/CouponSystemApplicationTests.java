@@ -1,12 +1,9 @@
 package com.ilway.couponsystem;
 
+import com.ilway.couponsystem.support.MySqlIntegrationTestSupport;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 
-@Import(TestcontainersConfiguration.class)
-@SpringBootTest
-class CouponSystemApplicationTests {
+class CouponSystemApplicationTests extends MySqlIntegrationTestSupport {
 
   @Test
   void contextLoads() {

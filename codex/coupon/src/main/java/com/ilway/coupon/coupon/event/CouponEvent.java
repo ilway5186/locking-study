@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -45,6 +46,10 @@ public class CouponEvent {
 
   @Column(nullable = false)
   private LocalDateTime updatedAt;
+
+  @Version
+  @Column(nullable = false)
+  private Long version;
 
   private CouponEvent(String name, int totalQuantity, LocalDateTime startAt, LocalDateTime endAt) {
     validateCreateArguments(name, totalQuantity, startAt, endAt);
@@ -94,6 +99,7 @@ public class CouponEvent {
     LocalDateTime now = LocalDateTime.now();
     this.createdAt = now;
     this.updatedAt = now;
+    this.version = 0L;
   }
 
   @PreUpdate

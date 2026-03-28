@@ -2,31 +2,24 @@ package com.ilway.coupon.coupon.api;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.ilway.coupon.comparison.unsafe.UnsafeCouponIssueRepository;
 import com.ilway.coupon.coupon.event.CouponEvent;
 import com.ilway.coupon.coupon.event.CouponEventRepository;
 import com.ilway.coupon.coupon.issue.CouponIssueRepository;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestRepository;
 import java.time.LocalDateTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
+import org.springframework.test.web.reactive.server.WebTestClient;
 
 import com.ilway.coupon.support.MySqlIntegrationTestSupport;
 
 class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
 
-  private MockMvc mockMvc;
-
   @Autowired
-  private WebApplicationContext webApplicationContext;
+  private WebTestClient webTestClient;
 
   @Autowired
   private CouponEventRepository couponEventRepository;
@@ -37,10 +30,13 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
   @Autowired
   private UnsafeCouponIssueRepository unsafeCouponIssueRepository;
 
+  @Autowired
+  private CouponIssueRequestRepository couponIssueRequestRepository;
+
   @BeforeEach
   void setUp() {
-    mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext).build();
     unsafeCouponIssueRepository.deleteAllInBatch();
+    couponIssueRequestRepository.deleteAllInBatch();
     couponIssueRepository.deleteAllInBatch();
     couponEventRepository.deleteAllInBatch();
   }
@@ -57,13 +53,16 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
         }
         """.formatted(now.minusMinutes(1), now.plusMinutes(10));
 
-    mockMvc.perform(post("/api/coupon-events")
-            .contentType(APPLICATION_JSON)
-            .content(requestBody))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.success").value(true))
-        .andExpect(jsonPath("$.data.name").value("오픈 기념 이벤트"))
-        .andExpect(jsonPath("$.data.totalQuantity").value(100));
+    webTestClient.post()
+        .uri("/api/coupon-events")
+        .contentType(APPLICATION_JSON)
+        .bodyValue(requestBody)
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(true)
+        .jsonPath("$.data.name").isEqualTo("오픈 기념 이벤트")
+        .jsonPath("$.data.totalQuantity").isEqualTo(100);
 
     assertThat(couponEventRepository.count()).isEqualTo(1);
   }
@@ -77,15 +76,85 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
         LocalDateTime.now().plusMinutes(10)
     ));
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content("{\"userId\":1}"))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.success").value(true))
-        .andExpect(jsonPath("$.data.couponEventId").value(couponEvent.getId()))
-        .andExpect(jsonPath("$.data.userId").value(1));
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":1}")
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(true)
+        .jsonPath("$.data.couponEventId").isEqualTo(couponEvent.getId().intValue())
+        .jsonPath("$.data.userId").isEqualTo(1)
+        .jsonPath("$.data.resultType").isEqualTo("ISSUED");
 
     assertThat(couponIssueRepository.count()).isEqualTo(1);
+  }
+
+  @Test
+  void 같은_idempotencyKey로_재요청하면_기존_성공결과를_재사용한다() {
+    CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
+        "멱등 이벤트",
+        10,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "issue-1")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":17}")
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.data.resultType").isEqualTo("ISSUED");
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "issue-1")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":17}")
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(true)
+        .jsonPath("$.data.resultType").isEqualTo("REUSED");
+
+    assertThat(couponIssueRepository.count()).isEqualTo(1);
+    assertThat(couponIssueRequestRepository.count()).isEqualTo(1);
+  }
+
+  @Test
+  void 다른_idempotencyKey로_같은_유저가_재요청하면_중복발급에_실패한다() {
+    CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
+        "중복 판별 이벤트",
+        10,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "issue-a")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":21}")
+        .exchange()
+        .expectStatus().isOk();
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "issue-b")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":21}")
+        .exchange()
+        .expectStatus().isEqualTo(409)
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(false)
+        .jsonPath("$.error.code").isEqualTo("COUPON-ISSUE-410");
+
+    assertThat(couponIssueRepository.count()).isEqualTo(1);
+    assertThat(couponIssueRequestRepository.count()).isEqualTo(2);
   }
 
   @Test
@@ -99,17 +168,22 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
 
     String requestBody = "{\"userId\":7}";
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content(requestBody))
-        .andExpect(status().isOk());
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue(requestBody)
+        .exchange()
+        .expectStatus().isOk();
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content(requestBody))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.success").value(false))
-        .andExpect(jsonPath("$.error.code").value("COUPON-ISSUE-410"));
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue(requestBody)
+        .exchange()
+        .expectStatus().isEqualTo(409)
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(false)
+        .jsonPath("$.error.code").isEqualTo("COUPON-ISSUE-410");
   }
 
   @Test
@@ -121,17 +195,22 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
         LocalDateTime.now().plusMinutes(10)
     ));
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content("{\"userId\":1}"))
-        .andExpect(status().isOk());
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":1}")
+        .exchange()
+        .expectStatus().isOk();
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content("{\"userId\":2}"))
-        .andExpect(status().isConflict())
-        .andExpect(jsonPath("$.success").value(false))
-        .andExpect(jsonPath("$.error.code").value("COUPON-ISSUE-409"));
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":2}")
+        .exchange()
+        .expectStatus().isEqualTo(409)
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(false)
+        .jsonPath("$.error.code").isEqualTo("COUPON-ISSUE-409");
   }
 
   @Test
@@ -143,16 +222,21 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
         LocalDateTime.now().plusMinutes(10)
     ));
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content("{\"userId\":3}"))
-        .andExpect(status().isOk());
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":3}")
+        .exchange()
+        .expectStatus().isOk();
 
-    mockMvc.perform(get("/api/users/{userId}/coupon-issues", 3L))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.success").value(true))
-        .andExpect(jsonPath("$.data[0].couponEventId").value(couponEvent.getId()))
-        .andExpect(jsonPath("$.data[0].eventName").value("선착순 이벤트"));
+    webTestClient.get()
+        .uri("/api/users/{userId}/coupon-issues", 3L)
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(true)
+        .jsonPath("$.data[0].couponEventId").isEqualTo(couponEvent.getId().intValue())
+        .jsonPath("$.data[0].eventName").isEqualTo("선착순 이벤트");
   }
 
   @Test
@@ -164,16 +248,72 @@ class CouponApiIntegrationTest extends MySqlIntegrationTestSupport {
         LocalDateTime.now().plusMinutes(10)
     ));
 
-    mockMvc.perform(post("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
-            .contentType(APPLICATION_JSON)
-            .content("{\"userId\":11}"))
-        .andExpect(status().isOk());
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":11}")
+        .exchange()
+        .expectStatus().isOk();
 
-    mockMvc.perform(get("/api/admin/coupon-events/{couponEventId}/statistics", couponEvent.getId()))
-        .andExpect(status().isOk())
-        .andExpect(jsonPath("$.success").value(true))
-        .andExpect(jsonPath("$.data.couponEventId").value(couponEvent.getId()))
-        .andExpect(jsonPath("$.data.successCount").value(1))
-        .andExpect(jsonPath("$.data.remainingQuantity").value(4));
+    webTestClient.get()
+        .uri("/api/admin/coupon-events/{couponEventId}/statistics", couponEvent.getId())
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.success").isEqualTo(true)
+        .jsonPath("$.data.couponEventId").isEqualTo(couponEvent.getId().intValue())
+        .jsonPath("$.data.successCount").isEqualTo(1)
+        .jsonPath("$.data.totalRequestCount").isEqualTo(1)
+        .jsonPath("$.data.totalAttemptCount").isEqualTo(1)
+        .jsonPath("$.data.successRequestCount").isEqualTo(1)
+        .jsonPath("$.data.failureRequestCount").isEqualTo(0)
+        .jsonPath("$.data.reusedRequestCount").isEqualTo(0)
+        .jsonPath("$.data.remainingQuantity").isEqualTo(4);
+  }
+
+  @Test
+  void 요청이력기반으로_실패통계와_재사용횟수를_조회할_수_있다() {
+    CouponEvent couponEvent = couponEventRepository.save(CouponEvent.create(
+        "요청 이력 이벤트",
+        1,
+        LocalDateTime.now().minusMinutes(1),
+        LocalDateTime.now().plusMinutes(10)
+    ));
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "success-1")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":31}")
+        .exchange()
+        .expectStatus().isOk();
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "success-1")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":31}")
+        .exchange()
+        .expectStatus().isOk();
+
+    webTestClient.post()
+        .uri("/api/coupon-events/{couponEventId}/issues", couponEvent.getId())
+        .header("Idempotency-Key", "sold-out-1")
+        .contentType(APPLICATION_JSON)
+        .bodyValue("{\"userId\":32}")
+        .exchange()
+        .expectStatus().isEqualTo(409);
+
+    webTestClient.get()
+        .uri("/api/admin/coupon-events/{couponEventId}/statistics", couponEvent.getId())
+        .exchange()
+        .expectStatus().isOk()
+        .expectBody()
+        .jsonPath("$.data.totalRequestCount").isEqualTo(2)
+        .jsonPath("$.data.totalAttemptCount").isEqualTo(3)
+        .jsonPath("$.data.successRequestCount").isEqualTo(1)
+        .jsonPath("$.data.failureRequestCount").isEqualTo(1)
+        .jsonPath("$.data.reusedRequestCount").isEqualTo(1)
+        .jsonPath("$.data.failureReasonCounts.SOLD_OUT").isEqualTo(1);
   }
 }
