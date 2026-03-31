@@ -254,6 +254,76 @@ create index idx_coupon_issue_request_event_failure
 - 멱등 재사용 횟수
 - 실패 사유별 집계
 
+### 쿠폰 발급 플로우 차트
+
+#### 1. 기본 발급 흐름
+
+아래 플로우는 public API 기준 기본 흐름이다.  
+핵심은 "먼저 요청을 등록하고(register), 그 결과에 따라 새 요청 처리 / 기존 결과 재사용 / 진행 중 중복 요청 응답"으로 갈린다는 점이다.
+
+```mermaid
+flowchart TD
+    A["POST /coupon-events/:id/issues"] --> B["Request Body 검증"]
+    B --> C["Idempotency-Key 확인"]
+    C --> D["요청 이력 register"]
+
+    D -->|NEW| E["새 요청 처리"]
+    D -->|SUCCESS_REPLAY| F["기존 성공 결과 재사용"]
+    D -->|FAILURE_REPLAY| G["기존 실패 결과 재사용"]
+    D -->|IN_PROGRESS_DUPLICATE| H["409 DUPLICATE_REQUEST_IN_PROGRESS"]
+
+    E --> I["기본 전략: 비관적 락 Processor 진입"]
+    I --> J["coupon_event FOR UPDATE 조회"]
+    J --> K["발급 기간 검증"]
+    K --> L["같은 user 중복 발급 검사"]
+    L --> M["issued_quantity 증가"]
+    M --> N["coupon_issue 저장"]
+    N --> O["요청 이력 SUCCESS 업데이트"]
+    O --> P["ISSUED 응답 반환"]
+
+    F --> Q["REUSED 응답 반환"]
+    G --> R["같은 실패 응답 반환"]
+
+    K -->|실패| S["요청 이력 FAILED 업데이트"]
+    L -->|실패| S
+    M -->|실패| S
+    N -->|실패| S
+    S --> T["실패 응답 반환"]
+```
+
+#### 2. 새 요청일 때 전략별 수량 제어 분기
+
+비교 포인트는 "새 요청 처리" 안에서 갈린다.  
+현재 public API 기본 경로는 비관적 락이고, 조건부 UPDATE와 낙관적 락은 비교용 서비스/테스트 경로다.
+
+```mermaid
+flowchart LR
+    A["NEW 요청"] --> B{"수량 제어 전략"}
+
+    B --> C["비관적 락"]
+    B --> D["조건부 UPDATE"]
+    B --> E["낙관적 락"]
+
+    C --> C1["FOR UPDATE로 이벤트 조회"]
+    C1 --> C2["검증"]
+    C2 --> C3["수량 증가 후 저장"]
+
+    D --> D1["일반 조회로 검증"]
+    D1 --> D2["조건부 UPDATE 실행"]
+    D2 --> D3["반영 row 수로 성공/실패 해석"]
+
+    E --> E1["version 포함 이벤트 조회"]
+    E1 --> E2["검증 후 수량 증가"]
+    E2 --> E3["flush 시 optimistic conflict 감지"]
+    E3 --> E4["재시도 또는 CONFLICT_RETRY_EXCEEDED"]
+```
+
+#### 3. 차트를 읽을 때 봐야 할 포인트
+
+- 사용자 중복 발급 방지와 idempotency는 다른 분기다
+- 요청 이력은 발급 성공 여부뿐 아니라 재사용 / 실패 집계의 기준점이다
+- 세 전략은 모두 "수량 초과 방지"를 다루지만 충돌을 처리하는 방식이 다르다
+
 ## 7. 왜 Header 기반 Idempotency-Key를 선택했는가
 
 이번 2차에서는 `requestId`를 body에 넣지 않고 `Idempotency-Key` 헤더를 선택했다.
@@ -507,7 +577,7 @@ DB는 UPDATE 동안 필요한 잠금을 사용한다.
 
 - 요청 이력 상태 전이
 - 실패 사유 분류
-- idempotency claim 정책
+- idempotency register 정책
 - 조건부 UPDATE 실패 해석
 - 낙관적 락 재시도 정책
 

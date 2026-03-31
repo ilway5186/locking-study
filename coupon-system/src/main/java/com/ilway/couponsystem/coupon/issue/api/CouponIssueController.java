@@ -9,15 +9,19 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api")
 @RequiredArgsConstructor
+@RequestMapping("/api")
 public class CouponIssueController {
 
   private final CouponIssueService couponIssueService;
 
   @PostMapping("/coupon-events/{couponEventId}/issues")
-  public ApiResponse<CouponIssueResponse> issue(@PathVariable Long couponEventId, @Valid @RequestBody IssueCouponRequest request) {
-    return ApiResponse.success(couponIssueService.issue(couponEventId, request.userId()));
+  public ApiResponse<CouponIssueResponse> issue(
+    @PathVariable Long couponEventId,
+    @RequestHeader(value = "Idempotency-Key", required = true) String idempotencyKey,
+    @Valid @RequestBody IssueCouponRequest request
+  ) {
+    return ApiResponse.success(couponIssueService.issue(couponEventId, request.userId(), idempotencyKey));
   }
 
   @GetMapping("/users/{userId}/coupon-issues")

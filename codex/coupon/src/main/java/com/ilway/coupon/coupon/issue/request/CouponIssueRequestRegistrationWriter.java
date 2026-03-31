@@ -7,7 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Component
 @RequiredArgsConstructor
-public class CouponIssueRequestClaimWriter {
+public class CouponIssueRequestRegistrationWriter {
 
   private final CouponIssueRequestRepository couponIssueRequestRepository;
 

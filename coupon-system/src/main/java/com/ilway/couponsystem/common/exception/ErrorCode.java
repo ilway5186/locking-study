@@ -18,6 +18,8 @@ public enum ErrorCode {
 
   // 쿠퐁 이벤트
   COUPON_EVENT_NOT_FOUND(NOT_FOUND, "COUPON-EVENT-404", "쿠폰 이벤트를 찾을 수 없습니다."),
+  CONFLICT_RETRY_EXCEEDED(HttpStatus.CONFLICT, "COUPON-ISSUE-412", "동시성 충돌 재시도 한도를 초과했습니다."),
+  DUPLICATE_REQUEST_IN_PROGRESS(HttpStatus.CONFLICT, "COUPON-ISSUE-411", "같은 idempotency 요청이 아직 처리 중입니다."),
 
   // 크폰 발행
   ISSUE_PERIOD_CLOSED(BAD_REQUEST, "COUPON-ISSUE-400", "발급 기간이 아닙니다."),

@@ -17,16 +17,16 @@ public class CouponIssueRequestService {
   private static final int MAX_IDEMPOTENCY_KEY_LENGTH = 100;
 
   private final CouponIssueRequestRepository couponIssueRequestRepository;
-  private final CouponIssueRequestClaimWriter couponIssueRequestClaimWriter;
+  private final CouponIssueRequestRegistrationWriter couponIssueRequestRegistrationWriter;
 
-  public CouponIssueRequestClaim claim(Long couponEventId, Long userId, String idempotencyKey) {
+  public CouponIssueRequestRegistration register(Long couponEventId, Long userId, String idempotencyKey) {
     String resolvedIdempotencyKey = resolveIdempotencyKey(idempotencyKey);
 
     try {
-      CouponIssueRequest request = couponIssueRequestClaimWriter.createInProgress(resolvedIdempotencyKey, couponEventId, userId);
-      return new CouponIssueRequestClaim(CouponIssueRequestClaimType.NEW, request.getId(), request);
+      CouponIssueRequest request = couponIssueRequestRegistrationWriter.createInProgress(resolvedIdempotencyKey, couponEventId, userId);
+      return new CouponIssueRequestRegistration(CouponIssueRequestRegistrationType.NEW, request);
     } catch (RuntimeException exception) {
-      return reuseExistingRequest(couponEventId, userId, resolvedIdempotencyKey, exception);
+      return reuseRegisteredRequest(couponEventId, userId, resolvedIdempotencyKey, exception);
     }
   }
 
@@ -77,16 +77,16 @@ public class CouponIssueRequestService {
     return couponIssueRequestRepository.sumReusedCountByCouponEventId(couponEventId);
   }
 
-  protected CouponIssueRequestClaim reuseExistingRequest(Long couponEventId, Long userId, String idempotencyKey, RuntimeException exception) {
+  protected CouponIssueRequestRegistration reuseRegisteredRequest(Long couponEventId, Long userId, String idempotencyKey, RuntimeException exception) {
     CouponIssueRequest existingRequest = couponIssueRequestRepository
         .findByCouponEventIdAndUserIdAndIdempotencyKey(couponEventId, userId, idempotencyKey)
         .orElseThrow(() -> exception);
     existingRequest.markReused();
     couponIssueRequestRepository.incrementReusedCount(existingRequest.getId());
     return switch (existingRequest.getRequestStatus()) {
-      case SUCCESS -> new CouponIssueRequestClaim(CouponIssueRequestClaimType.SUCCESS_REPLAY, existingRequest.getId(), existingRequest);
-      case FAILED -> new CouponIssueRequestClaim(CouponIssueRequestClaimType.FAILURE_REPLAY, existingRequest.getId(), existingRequest);
-      case IN_PROGRESS -> new CouponIssueRequestClaim(CouponIssueRequestClaimType.IN_PROGRESS_DUPLICATE, existingRequest.getId(), existingRequest);
+      case SUCCESS -> new CouponIssueRequestRegistration(CouponIssueRequestRegistrationType.SUCCESS_REPLAY, existingRequest);
+      case FAILED -> new CouponIssueRequestRegistration(CouponIssueRequestRegistrationType.FAILURE_REPLAY, existingRequest);
+      case IN_PROGRESS -> new CouponIssueRequestRegistration(CouponIssueRequestRegistrationType.IN_PROGRESS_DUPLICATE, existingRequest);
     };
   }
 

@@ -40,6 +40,10 @@ public class CouponEvent {
   @Column(name = "end_at", nullable = false)
   private LocalDateTime endAt;
 
+  @Version
+  @Column(name = "version", nullable = false)
+  private Long version;
+
   @CreatedDate
   @Column(name = "created_at", nullable = false, updatable = false)
   private LocalDateTime createdAt;

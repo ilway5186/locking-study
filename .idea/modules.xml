@@ -4,6 +4,7 @@
     <modules>
       <module fileurl="file://$PROJECT_DIR$/2_locking.iml" filepath="$PROJECT_DIR$/2_locking.iml" />
       <module fileurl="file://$PROJECT_DIR$/.idea/modules/coupon-system.main.iml" filepath="$PROJECT_DIR$/.idea/modules/coupon-system.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/coupon-system.test.iml" filepath="$PROJECT_DIR$/.idea/modules/coupon-system.test.iml" />
     </modules>
   </component>
 </project>

@@ -7,7 +7,7 @@ import com.ilway.coupon.coupon.issue.CouponIssueRepository;
 import com.ilway.coupon.coupon.issue.api.CouponIssueResponse;
 import com.ilway.coupon.coupon.issue.request.CouponIssueFailureReason;
 import com.ilway.coupon.coupon.issue.request.CouponIssueRequest;
-import com.ilway.coupon.coupon.issue.request.CouponIssueRequestClaim;
+import com.ilway.coupon.coupon.issue.request.CouponIssueRequestRegistration;
 import com.ilway.coupon.coupon.issue.request.CouponIssueRequestService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -25,12 +25,12 @@ public class ConditionalCouponIssueService {
   }
 
   public CouponIssueResponse issue(Long couponEventId, Long userId, String idempotencyKey) {
-    CouponIssueRequestClaim claim = couponIssueRequestService.claim(couponEventId, userId, idempotencyKey);
+    CouponIssueRequestRegistration registration = couponIssueRequestService.register(couponEventId, userId, idempotencyKey);
 
-    return switch (claim.type()) {
-      case NEW -> executeNewRequest(claim.requestId(), couponEventId, userId);
-      case SUCCESS_REPLAY -> reuseSuccess(claim.request());
-      case FAILURE_REPLAY -> throw claim.request().getFailureReason().toBusinessException();
+    return switch (registration.type()) {
+      case NEW -> executeNewRequest(registration.request().getId(), couponEventId, userId);
+      case SUCCESS_REPLAY -> reuseSuccess(registration.request());
+      case FAILURE_REPLAY -> throw registration.request().getFailureReason().toBusinessException();
       case IN_PROGRESS_DUPLICATE -> throw new BusinessException(ErrorCode.DUPLICATE_REQUEST_IN_PROGRESS);
     };
   }

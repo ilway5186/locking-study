@@ -21,20 +21,20 @@ class CouponIssueRequestServiceTest {
   private CouponIssueRequestRepository couponIssueRequestRepository;
 
   @Mock
-  private CouponIssueRequestClaimWriter couponIssueRequestClaimWriter;
+  private CouponIssueRequestRegistrationWriter couponIssueRequestRegistrationWriter;
 
   @InjectMocks
   private CouponIssueRequestService couponIssueRequestService;
 
   @Test
-  void 새로운_idempotencyKey면_새로운_요청을_claim한다() {
+  void 새로운_idempotencyKey면_새로운_요청을_register한다() {
     CouponIssueRequest saved = CouponIssueRequest.createInProgress("idem-1", 1L, 2L);
-    given(couponIssueRequestClaimWriter.createInProgress("idem-1", 1L, 2L)).willReturn(saved);
+    given(couponIssueRequestRegistrationWriter.createInProgress("idem-1", 1L, 2L)).willReturn(saved);
 
-    CouponIssueRequestClaim claim = couponIssueRequestService.claim(1L, 2L, "idem-1");
+    CouponIssueRequestRegistration registration = couponIssueRequestService.register(1L, 2L, "idem-1");
 
-    assertThat(claim.type()).isEqualTo(CouponIssueRequestClaimType.NEW);
-    verify(couponIssueRequestClaimWriter).createInProgress("idem-1", 1L, 2L);
+    assertThat(registration.type()).isEqualTo(CouponIssueRequestRegistrationType.NEW);
+    verify(couponIssueRequestRegistrationWriter).createInProgress("idem-1", 1L, 2L);
   }
 
   @Test
@@ -42,14 +42,14 @@ class CouponIssueRequestServiceTest {
     CouponIssueRequest existing = CouponIssueRequest.createInProgress("idem-2", 1L, 2L);
     existing.markSuccess(10L);
 
-    given(couponIssueRequestClaimWriter.createInProgress("idem-2", 1L, 2L))
+    given(couponIssueRequestRegistrationWriter.createInProgress("idem-2", 1L, 2L))
         .willThrow(new DataIntegrityViolationException("duplicate"));
     given(couponIssueRequestRepository.findByCouponEventIdAndUserIdAndIdempotencyKey(1L, 2L, "idem-2"))
         .willReturn(Optional.of(existing));
 
-    CouponIssueRequestClaim claim = couponIssueRequestService.claim(1L, 2L, "idem-2");
+    CouponIssueRequestRegistration registration = couponIssueRequestService.register(1L, 2L, "idem-2");
 
-    assertThat(claim.type()).isEqualTo(CouponIssueRequestClaimType.SUCCESS_REPLAY);
+    assertThat(registration.type()).isEqualTo(CouponIssueRequestRegistrationType.SUCCESS_REPLAY);
     assertThat(existing.getReusedCount()).isEqualTo(1);
   }
 
@@ -58,14 +58,14 @@ class CouponIssueRequestServiceTest {
     CouponIssueRequest existing = CouponIssueRequest.createInProgress("idem-3", 1L, 2L);
     existing.markFailed(CouponIssueFailureReason.SOLD_OUT);
 
-    given(couponIssueRequestClaimWriter.createInProgress("idem-3", 1L, 2L))
+    given(couponIssueRequestRegistrationWriter.createInProgress("idem-3", 1L, 2L))
         .willThrow(new DataIntegrityViolationException("duplicate"));
     given(couponIssueRequestRepository.findByCouponEventIdAndUserIdAndIdempotencyKey(1L, 2L, "idem-3"))
         .willReturn(Optional.of(existing));
 
-    CouponIssueRequestClaim claim = couponIssueRequestService.claim(1L, 2L, "idem-3");
+    CouponIssueRequestRegistration registration = couponIssueRequestService.register(1L, 2L, "idem-3");
 
-    assertThat(claim.type()).isEqualTo(CouponIssueRequestClaimType.FAILURE_REPLAY);
+    assertThat(registration.type()).isEqualTo(CouponIssueRequestRegistrationType.FAILURE_REPLAY);
     assertThat(existing.getReusedCount()).isEqualTo(1);
   }
 
@@ -73,14 +73,14 @@ class CouponIssueRequestServiceTest {
   void 아직_처리중인_요청키가_다시_오면_중복요청으로_해석한다() {
     CouponIssueRequest existing = CouponIssueRequest.createInProgress("idem-4", 1L, 2L);
 
-    given(couponIssueRequestClaimWriter.createInProgress("idem-4", 1L, 2L))
+    given(couponIssueRequestRegistrationWriter.createInProgress("idem-4", 1L, 2L))
         .willThrow(new DataIntegrityViolationException("duplicate"));
     given(couponIssueRequestRepository.findByCouponEventIdAndUserIdAndIdempotencyKey(1L, 2L, "idem-4"))
         .willReturn(Optional.of(existing));
 
-    CouponIssueRequestClaim claim = couponIssueRequestService.claim(1L, 2L, "idem-4");
+    CouponIssueRequestRegistration registration = couponIssueRequestService.register(1L, 2L, "idem-4");
 
-    assertThat(claim.type()).isEqualTo(CouponIssueRequestClaimType.IN_PROGRESS_DUPLICATE);
+    assertThat(registration.type()).isEqualTo(CouponIssueRequestRegistrationType.IN_PROGRESS_DUPLICATE);
     assertThat(existing.getReusedCount()).isEqualTo(1);
     verify(couponIssueRequestRepository).findByCouponEventIdAndUserIdAndIdempotencyKey(eq(1L), eq(2L), eq("idem-4"));
   }

@@ -1,6 +1,6 @@
 package com.ilway.coupon.coupon.issue.request;
 
-public enum CouponIssueRequestClaimType {
+public enum CouponIssueRequestRegistrationType {
   NEW,
   SUCCESS_REPLAY,
   FAILURE_REPLAY,
