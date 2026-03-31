@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: reservation
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+        format_sql: true
+
+reservation:
+  hold:
+    duration: PT5M
+    expiration-scan-millis: 30000
