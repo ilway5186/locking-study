@@ -11,6 +11,7 @@ import com.ilway.reservation.seat.domain.Seat;
 import com.ilway.reservation.seat.domain.SeatRepository;
 import com.ilway.reservation.show.domain.Show;
 import com.ilway.reservation.show.domain.ShowRepository;
+import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -28,6 +29,7 @@ public class SeatReservationTxService {
   private final SeatRepository seatRepository;
   private final SeatReservationRepository reservationRepository;
   private final BookingWindowPolicy bookingWindowPolicy;
+  private final EntityManager entityManager;
   private final Clock clock;
   private final Duration holdDuration;
 
@@ -36,6 +38,7 @@ public class SeatReservationTxService {
       SeatRepository seatRepository,
       SeatReservationRepository reservationRepository,
       BookingWindowPolicy bookingWindowPolicy,
+      EntityManager entityManager,
       Clock clock,
       @Value("${reservation.hold.duration:PT5M}") Duration holdDuration
   ) {
@@ -43,6 +46,7 @@ public class SeatReservationTxService {
     this.seatRepository = seatRepository;
     this.reservationRepository = reservationRepository;
     this.bookingWindowPolicy = bookingWindowPolicy;
+    this.entityManager = entityManager;
     this.clock = clock;
     this.holdDuration = holdDuration;
   }
@@ -77,10 +81,9 @@ public class SeatReservationTxService {
     seatRepository.findByIdAndShowIdForUpdate(reservation.getSeatId(), reservation.getShowId())
         .orElseThrow(() -> new ReservationException(ReservationFailureReason.SEAT_NOT_FOUND));
 
-    SeatReservation current = reservationRepository.findById(reservationId)
-        .orElseThrow(() -> new ReservationException(ReservationFailureReason.RESERVATION_NOT_FOUND));
-    current.confirm(userId, now);
-    return toReservationResponse(current);
+    refreshAfterSeatLock(reservation);
+    reservation.confirm(userId, now);
+    return toReservationResponse(reservation);
   }
 
   @Transactional(noRollbackFor = ReservationException.class, isolation = Isolation.READ_COMMITTED)
@@ -92,10 +95,9 @@ public class SeatReservationTxService {
     seatRepository.findByIdAndShowIdForUpdate(reservation.getSeatId(), reservation.getShowId())
         .orElseThrow(() -> new ReservationException(ReservationFailureReason.SEAT_NOT_FOUND));
 
-    SeatReservation current = reservationRepository.findById(reservationId)
-        .orElseThrow(() -> new ReservationException(ReservationFailureReason.RESERVATION_NOT_FOUND));
-    current.cancel(userId, now);
-    return toReservationResponse(current);
+    refreshAfterSeatLock(reservation);
+    reservation.cancel(userId, now);
+    return toReservationResponse(reservation);
   }
 
   @Transactional(noRollbackFor = ReservationException.class, isolation = Isolation.READ_COMMITTED)
@@ -108,15 +110,15 @@ public class SeatReservationTxService {
     seatRepository.findByIdAndShowIdForUpdate(reservation.getSeatId(), reservation.getShowId())
         .orElseThrow(() -> new ReservationException(ReservationFailureReason.SEAT_NOT_FOUND));
 
-    SeatReservation current = reservationRepository.findById(reservationId).orElse(null);
-    if (current == null || current.getStatus() != SeatReservationStatus.HOLD) {
+    refreshAfterSeatLock(reservation);
+    if (reservation.getStatus() != SeatReservationStatus.HOLD) {
       return false;
     }
     Instant now = Instant.now(clock);
-    if (!current.isExpiredAt(now)) {
+    if (!reservation.isExpiredAt(now)) {
       return false;
     }
-    current.expire(now);
+    reservation.expire(now);
     return true;
   }
 
@@ -169,5 +171,11 @@ public class SeatReservationTxService {
     if (latestReservation.getStatus() == SeatReservationStatus.RESERVED) {
       throw new ReservationException(ReservationFailureReason.SEAT_ALREADY_RESERVED);
     }
+  }
+
+  // The reservation is read before the seat lock only to discover which seat to serialize on.
+  // After the lock is acquired, refresh the managed entity so state transitions use the latest row state.
+  private void refreshAfterSeatLock(SeatReservation reservation) {
+    entityManager.refresh(reservation);
   }
 }

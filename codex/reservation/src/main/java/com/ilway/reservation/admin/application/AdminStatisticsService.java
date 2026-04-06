@@ -48,12 +48,12 @@ public class AdminStatisticsService {
     expirationService.expireOverdueHolds();
 
     Map<SeatReservationStatus, Long> statusCounts = new EnumMap<>(SeatReservationStatus.class);
-    reservationRepository.countByShowIdGroupByStatus(showId).forEach(tuple ->
-        statusCounts.put((SeatReservationStatus) tuple[0], (Long) tuple[1]));
+    reservationRepository.countByShowIdGroupByStatus(showId).forEach(projection ->
+        statusCounts.put(projection.getStatus(), projection.getCount()));
 
     Map<String, Long> failureReasonCounts = new LinkedHashMap<>();
-    requestRepository.countFailureReasonsByShowId(showId).forEach(tuple ->
-        failureReasonCounts.put(String.valueOf(tuple[0]), (Long) tuple[1]));
+    requestRepository.countFailureReasonsByShowId(showId).forEach(projection ->
+        failureReasonCounts.put(String.valueOf(projection.getFailureReason()), projection.getCount()));
 
     return new AdminStatisticsResponse(
         seatRepository.findByShowIdOrderBySeatNumberAsc(showId).size(),

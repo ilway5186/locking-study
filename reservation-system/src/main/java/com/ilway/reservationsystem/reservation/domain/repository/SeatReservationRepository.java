@@ -1,10 +1,13 @@
-package com.ilway.reservation.reservation.domain;
+package com.ilway.reservationsystem.reservation.domain.repository;
+
+import com.ilway.reservationsystem.reservation.domain.SeatReservation;
+import com.ilway.reservationsystem.reservation.domain.SeatReservationStatus;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
 
 public interface SeatReservationRepository extends JpaRepository<SeatReservation, Long> {
 
@@ -14,9 +17,10 @@ public interface SeatReservationRepository extends JpaRepository<SeatReservation
 
   List<SeatReservation> findByStatusAndHoldExpiresAtLessThanEqual(SeatReservationStatus status, Instant holdExpiresAt);
 
-  @Query("select r from SeatReservation r where r.showId = :showId order by r.seatId asc, r.createdAt desc")
+  @Query("SELECT r FROM SeatReservation r WHERE r.showId = :showId ORDER BY r.seatID ASC, r.createdAt DESC")
   List<SeatReservation> findAllByShowIdOrderBySeatIdAndCreatedAtDesc(Long showId);
 
-  @Query("select r.status as status, count(r) as count from SeatReservation r where r.showId = :showId group by r.status")
+  @Query("SELECT r.status, COUNT(r) FROM SeatReservation r WHERE r.showId = :showId GROUP BY r.status")
   List<ReservationStatusCountProjection> countByShowIdGroupByStatus(Long showId);
+
 }

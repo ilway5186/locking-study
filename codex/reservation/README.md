@@ -188,6 +188,10 @@
 - 낙관적 락 버전 비교
 - 좌석 홀드 대기열 / 큐
 - 결제용 idempotency 분리
+- 요청 이력 기록 리팩터링
+  - `REQUIRES_NEW`로 분리된 트랜잭션 경계가 이름과 책임만으로도 드러나도록 `SeatReservationFacade` / `SeatReservationRequestService` 구조와 네이밍 재정리
+  - 협업 관점에서 혼동 포인트가 되는 상태명과 책임 경계도 함께 개선
+  - 예: `ReservationRequestStatus.SUCCEEDED`처럼 "요청 성공"과 "예약 완료"를 혼동할 수 있는 표현 정리
 
 ## 15. 쿠폰 프로젝트에서 가져온 개념 / 새로 배운 개념
 ### 그대로 가져온 것

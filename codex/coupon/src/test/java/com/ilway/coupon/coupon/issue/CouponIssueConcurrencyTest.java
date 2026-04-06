@@ -165,7 +165,7 @@ class CouponIssueConcurrencyTest extends MySqlIntegrationTestSupport {
         LocalDateTime.now().minusMinutes(1),
         LocalDateTime.now().plusMinutes(10)
     ));
-    CouponEvent conditionalEvent = couponEventRepository.save(CouponEvent.create(0
+    CouponEvent conditionalEvent = couponEventRepository.save(CouponEvent.create(
         "conditional-compare",
         50,
         LocalDateTime.now().minusMinutes(1),

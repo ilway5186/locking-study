@@ -17,8 +17,13 @@ public interface SeatReservationRequestRepository extends JpaRepository<SeatRese
 
   long countByShowIdAndRequestStatus(Long showId, ReservationRequestStatus requestStatus);
 
-  @Query("select r.failureReason, count(r) from SeatReservationRequest r where r.showId = :showId and r.failureReason is not null group by r.failureReason")
-  List<Object[]> countFailureReasonsByShowId(Long showId);
+  @Query("""
+      select r.failureReason as failureReason, count(r) as count
+      from SeatReservationRequest r
+      where r.showId = :showId and r.failureReason is not null
+      group by r.failureReason
+      """)
+  List<FailureReasonCountProjection> countFailureReasonsByShowId(Long showId);
 
   @Query("select coalesce(sum(r.reusedCount), 0) from SeatReservationRequest r where r.showId = :showId")
   Long sumReusedCountByShowId(Long showId);
