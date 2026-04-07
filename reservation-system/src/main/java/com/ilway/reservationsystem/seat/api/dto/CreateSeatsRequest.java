@@ -1,12 +1,12 @@
 package com.ilway.reservationsystem.seat.api.dto;
 
-import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
 
 public record CreateSeatsRequest(
-  @Nullable Long showId,
+  @NotNull Long showId,
   @NotEmpty List<String> seatNumbers
 ) {
 }

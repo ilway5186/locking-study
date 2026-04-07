@@ -102,6 +102,16 @@
 - 기본 안전장치는 lazy expiration이다.
 - 즉, HOLD나 CONFIRM 시점에 `holdExpiresAt`을 다시 확인하고, 이미 만료됐으면 `EXPIRED`로 바꾼다.
 - 여기에 `@Scheduled` 정리 작업을 추가했다.
+- 여기서 정합성은 "만료된 HOLD가 더 이상 유효한 좌석 점유처럼 행동하지 않도록 보장하는 것"을 뜻한다.
+  - 만료된 HOLD는 CONFIRM되면 안 된다.
+  - 만료된 HOLD 때문에 다른 사용자가 같은 좌석을 계속 못 잡는 상황이 생기면 안 된다.
+  - 좌석 조회에서도 시간이 지난 HOLD는 사실상 `AVAILABLE`로 해석되어야 한다.
+- lazy expiration이 정합성을 보장하는 이유:
+  - 스케줄러가 아직 돌지 않았더라도, 실제 비즈니스 요청이 들어오는 순간 만료 여부를 다시 확인한다.
+  - 그래서 같은 좌석에 새 HOLD가 들어올 때도, 기존 HOLD가 이미 만료되었다면 그 자리에서 `EXPIRED` 처리 후 새 요청을 진행할 수 있다.
+  - CONFIRM/CANCEL 시점에도 만료 여부를 다시 검사하므로, TTL이 지난 HOLD가 뒤늦게 확정되는 문제를 막는다.
+- 좌석 조회는 DB status 문자열만 믿지 않고 현재 시각 기준으로 상태를 해석한다.
+  - 따라서 row가 아직 `HOLD`여도 `holdExpiresAt`이 지났다면 조회 결과는 `AVAILABLE`로 보여준다.
 
 왜 별도 로직이 필요한가:
 - HOLD는 시간이 지나면 자동으로 효력이 사라져야 한다.
@@ -111,6 +121,8 @@
 - lazy expiration이 correctness를 보장한다.
 - scheduler는 조회/통계 일관성을 정리하는 보조 역할만 맡는다.
 - 1차 학습 단계에서 가장 단순하면서도 설명하기 쉽다.
+- 즉 scheduler가 잠깐 늦거나 일시적으로 멈춰도 핵심 비즈니스 규칙은 깨지지 않도록 설계했다.
+- scheduler는 이미 만료된 HOLD row를 미리 `EXPIRED`로 정리해 주는 cleanup 성격이 강하다.
 
 ## 10. 멱등성 / 요청 이력 설명
 - HOLD API는 `Idempotency-Key`를 받는다.
@@ -120,6 +132,14 @@
   - 이전 실패면 같은 실패 사유를 재사용
   - 아직 진행 중이면 `DUPLICATE_REQUEST_IN_PROGRESS`
   - 같은 키를 다른 `showId/seatId/userId`에 재사용하면 `IDEMPOTENCY_PAYLOAD_MISMATCH`
+- 현재 구현의 재사용 방식:
+  - request history에는 성공 응답 JSON 전체를 저장하지 않고, `reservationId` 같은 식별 정보와 요청 상태만 저장한다.
+  - 같은 키로 재요청이 오면 request history에서 `reservationId`를 찾고, 현재 `SeatReservation`을 다시 조회해 응답을 재조립한다.
+  - 즉 "첫 성공 시점에 내려간 HTTP 응답 원본"을 그대로 replay하는 방식은 아니다.
+- 이 선택의 의미:
+  - 1차 학습 단계에서는 구조가 단순하고 구현 비용이 낮다.
+  - 반면 재요청 시점의 reservation 상태가 이미 바뀌었다면, 첫 응답과 완전히 동일한 JSON을 돌려준다는 보장은 없다.
+  - 예를 들어 첫 HOLD 성공 직후에는 응답 status가 `HOLD`였더라도, 이후 같은 reservation이 `RESERVED`로 바뀐 뒤 같은 key로 재요청하면 현재 상태 기준 응답이 내려갈 수 있다.
 
 쿠폰 프로젝트와 연결되는 지점:
 - request history 테이블
@@ -175,6 +195,9 @@
 ## 13. 이번 1차의 한계
 - 실제 결제 연동이 없다.
 - HOLD 성공 응답 원본 자체를 request history에 snapshot으로 저장하지는 않았다.
+  - 지금은 `reservationId`만 저장해 두고 재요청 시 현재 reservation row를 다시 읽어 응답을 만든다.
+  - 그래서 "같은 idempotency key면 첫 응답의 body를 byte 단위로 그대로 돌려준다"까지는 보장하지 않는다.
+  - 더 강한 멱등 응답 재현이 필요하다면 request history에 당시의 `HTTP status`, `response body`, 필요 시 `response headers`까지 snapshot으로 저장하는 방식이 필요하다.
 - RESERVED 취소 정책은 아직 단순화했다.
 - 다중 좌석 동시 선택은 다루지 않았다.
 - 조건부 UPDATE / 낙관적 락 비교 버전은 아직 넣지 않았다.
@@ -211,6 +234,8 @@
 - "쿠폰은 수량 경쟁이고, 좌석은 개별 자원 경쟁이라 락 단위가 다릅니다."
 - "좌석 예매 1차에서는 seat row 비관적 락으로 같은 좌석만 직렬화했습니다."
 - "정합성은 lazy expiration이 보장하고, scheduler는 cleanup 역할만 맡겼습니다."
+  - meaning:
+    만료 여부는 HOLD/CONFIRM/조회 시점마다 현재 시각 기준으로 다시 판정하므로, 스케줄러가 늦어도 만료된 HOLD가 유효한 예약처럼 행동하지 못한다는 뜻이다.
 - "멱등성은 seat occupancy와 별개 문제라 request history로 분리했습니다."
 - "MySQL REPEATABLE_READ에서 snapshot read 문제를 피하기 위해 HOLD 트랜잭션은 READ_COMMITTED로 조정했습니다."
 

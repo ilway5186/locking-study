@@ -13,7 +13,7 @@ import lombok.NoArgsConstructor;
     @Index(name = "idx_request_failure_reason", columnList = "failure_reason")
   },
   uniqueConstraints = {
-    @UniqueConstraint(name = "uk_request_action_user_idempotency", columnNames = {"action", "userId", "idempotency"})
+    @UniqueConstraint(name = "uk_request_action_user_idempotency", columnNames = {"action", "user_id", "idempotency_key"})
   }
 )
 @NoArgsConstructor(access = lombok.AccessLevel.PROTECTED)

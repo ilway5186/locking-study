@@ -14,7 +14,6 @@ import com.ilway.reservationsystem.seat.domain.SeatRepository;
 import com.ilway.reservationsystem.show.domain.Show;
 import com.ilway.reservationsystem.show.domain.ShowRepository;
 import jakarta.persistence.EntityManager;
-import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -27,7 +26,6 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class SeatReservationTxService {
 
   private final ShowRepository showRepo;
@@ -36,7 +34,25 @@ public class SeatReservationTxService {
   private final BookingWindowPolicy bookingWindowPolicy;
   private final EntityManager entityManager;
   private final Clock clock;
-  private final @Value("${reservation.hold.duration:PT5M}") Duration holdDuration;
+  private final Duration holdDuration;
+
+  public SeatReservationTxService(
+    ShowRepository showRepo,
+    SeatRepository seatRepo,
+    SeatReservationRepository reservationRepo,
+    BookingWindowPolicy bookingWindowPolicy,
+    EntityManager entityManager,
+    Clock clock,
+    @Value("${reservation.hold.duration:PT5M}") Duration holdDuration
+  ) {
+    this.showRepo = showRepo;
+    this.seatRepo = seatRepo;
+    this.reservationRepo = reservationRepo;
+    this.bookingWindowPolicy = bookingWindowPolicy;
+    this.entityManager = entityManager;
+    this.clock = clock;
+    this.holdDuration = holdDuration;
+  }
 
   @Transactional(noRollbackFor = ReservationException.class, isolation = Isolation.READ_COMMITTED)
   public ReservationResponse processHold(HoldSeatCommand command) {
@@ -94,7 +110,7 @@ public class SeatReservationTxService {
       return false;
     }
 
-    seatRepo.findByIdAndShowIdForUpdate(reservation.getId(),  reservation.getShowId())
+    seatRepo.findByIdAndShowIdForUpdate(reservation.getSeatId(), reservation.getShowId())
       .orElseThrow(() -> new ReservationException(ReservationFailureReason.RESERVATION_NOT_FOUND));
 
     refreshAfterSeatLock(reservation);

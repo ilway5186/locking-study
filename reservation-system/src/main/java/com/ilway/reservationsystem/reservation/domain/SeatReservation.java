@@ -16,7 +16,7 @@ import java.time.Instant;
     @Index(name = "idx_reservation_seat_id", columnList = "seat_id"),
     @Index(name = "idx_reservation_show_id", columnList = "show_id"),
     @Index(name = "idx_reservation_user_id", columnList = "user_id"),
-    @Index(name = "idx_reservation_status_hold_expires_at", columnList = "status,holdExpiresAt")
+    @Index(name = "idx_reservation_status_hold_expires_at", columnList = "status,hold_expires_at")
   }
 )
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

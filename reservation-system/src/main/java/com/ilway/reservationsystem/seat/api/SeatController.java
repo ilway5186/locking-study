@@ -19,7 +19,7 @@ public class SeatController {
 
   @PostMapping
   @ResponseStatus(HttpStatus.CREATED)
-  public SeatResponse createSeats(@Valid @RequestBody CreateSeatsRequest request) {
+  public List<SeatResponse> createSeats(@Valid @RequestBody CreateSeatsRequest request) {
     return seatService.createSeats(request);
   }
 

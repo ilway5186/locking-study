@@ -17,7 +17,7 @@ public interface SeatReservationRepository extends JpaRepository<SeatReservation
 
   List<SeatReservation> findByStatusAndHoldExpiresAtLessThanEqual(SeatReservationStatus status, Instant holdExpiresAt);
 
-  @Query("SELECT r FROM SeatReservation r WHERE r.showId = :showId ORDER BY r.seatID ASC, r.createdAt DESC")
+  @Query("SELECT r FROM SeatReservation r WHERE r.showId = :showId ORDER BY r.seatId ASC, r.createdAt DESC")
   List<SeatReservation> findAllByShowIdOrderBySeatIdAndCreatedAtDesc(Long showId);
 
   @Query("SELECT r.status, COUNT(r) FROM SeatReservation r WHERE r.showId = :showId GROUP BY r.status")
