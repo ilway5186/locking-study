@@ -1,0 +1,19 @@
+spring:
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  jackson:
+    time-zone: UTC
+
+reservation:
+  hold:
+    duration: PT2S
+    expiration-scan-millis: 600000
+  request:
+    replay-wait-timeout: PT5S
+    replay-poll-interval: PT0.05S
